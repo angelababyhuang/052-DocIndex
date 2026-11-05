@@ -12,7 +12,8 @@
 - **微信手动存**：延续 014 的 `001-按日期缓存` 另存模式，不解容器 DB（TCC + 法律风险，chatlog 已因法务函删除）。
 - **分类沿用 014 五类**（研发/测试/管理/商务/资料，ADR-0002 论证过）+ 项目单归属；**全部建成 WeKnora 标签**（`custom_metadata` 不能检索过滤，已核源码）。图片/视频独立成类。
 - **真相源 = 图片库 + 元数据**；向量库/WeKnora 索引是派生可重建。图片库照抄 031 的 ADR-0001/0002（内容 sha256 去重、`IMG-0001` 永不改号、单一母本 + `索引.tsv`、引用只认 `{{IMG-0001}}`）。
-- **图片双入口**：文档内嵌图走 WeKnora chunk↔图片关联；独立图走图片库 + 共享向量空间。**视频自建**：ffmpeg 抽帧 → VLM 概述 → 汇总入同一库。
+- **图片双入口**：文档内嵌图走 WeKnora chunk↔图片关联；独立图走图片库 + 共享向量空间。**图片概述用免费 GLM-4V-Flash，OCR 用免费 PaddleOCR-VL-1.5 + RapidOCR 兜底**。
+- **视频由人写简介**：不抽帧、不自动 VLM 概述（#5 决议）。
 - **模糊搜索 = 混合检索 + 同义词**，不做编辑距离（WeKnora 无此能力，已核源码）。
 - **查询入口 = WeKnora 原生飞书渠道 + 局域网 Web UI**，不自建机器人。
 - **迁移 014 可回退**：新建库导入，用 014 指纹算法重算校验，对不上的人工看，不用脚本静默重建。
@@ -26,11 +27,13 @@
 ## Decisions so far
 
 - [WeKnora 部署形态：云端 Lighthouse 镜像 vs 本地](https://github.com/angelababyhuang/052-DocIndex/issues/6): 开发测试期全云端（腾讯云 Lighthouse 官方 WeKnora 镜像 + COS + 云端 VLM API），本地采购部署进 Out of scope（第二阶段）。
+- [检索与嵌入架构：pplx-embed-v2-late 三选一](https://github.com/angelababyhuang/052-DocIndex/issues/4): 第一阶段纯文本检索（SiliconFlow bge-m3 免费 + WeKnora BM25），图片后置 caption、pplx 与图文同空间留第二阶段。
+- [视频与图片的云端 VLM/OCR 选型与视频抽帧策略](https://github.com/angelababyhuang/052-DocIndex/issues/5): 图片概述用免费 GLM-4V-Flash，OCR 用免费 PaddleOCR-VL-1.5 + RapidOCR 兜底，**视频由人写简介、不抽帧**。
 
 ## Not yet specified
 
 - **数据模型 spec 的字段级细节**（图片/视频实体字段、多项目归属的表达方式）—— 等检索/嵌入架构分叉定了才 sharp
-- **视频抽帧间隔、VLM 概述提示词、视频记录 schema**
+- **视频实体 schema**（人填简介字段、视频与项目/文档的关联）
 - **WeKnora 标签 → 检索过滤的映射细节**（项目/类别/图片/视频四类标签的命名与多值语义）
 - **spec 文档本身的章节结构**（等所有决策闭合后写，是 handoff 不是票）
 - **014 数据迁移脚本与校验规则**（依赖数据模型定稿）
