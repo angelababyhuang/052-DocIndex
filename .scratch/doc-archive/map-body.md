@@ -29,6 +29,7 @@
 - [WeKnora 部署形态：云端 Lighthouse 镜像 vs 本地](https://github.com/angelababyhuang/052-DocIndex/issues/6): 开发测试期全云端（腾讯云 Lighthouse 官方 WeKnora 镜像 + COS + 云端 VLM API），本地采购部署进 Out of scope（第二阶段）。
 - [检索与嵌入架构：pplx-embed-v2-late 三选一](https://github.com/angelababyhuang/052-DocIndex/issues/4): 第一阶段纯文本检索（SiliconFlow bge-m3 免费 + WeKnora BM25），图片后置 caption、pplx 与图文同空间留第二阶段。
 - [视频与图片的云端 VLM/OCR 选型与视频抽帧策略](https://github.com/angelababyhuang/052-DocIndex/issues/5): 图片概述用免费 GLM-4V-Flash，OCR 用免费 PaddleOCR-VL-1.5 + RapidOCR 兜底，**视频由人写简介、不抽帧**。
+- [飞书查询入口：WeKnora 原生飞书渠道 vs 自建](https://github.com/angelababyhuang/052-DocIndex/issues/7): WeKnora 原生飞书渠道（websocket），/search 定位 + 问答附赠，先私聊后群聊，建应用清单后置。
 
 ## Not yet specified
 
