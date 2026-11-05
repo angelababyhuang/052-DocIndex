@@ -1,0 +1,22 @@
+# 凭据与本地环境（绝不提交）
+.env
+.env.local
+.env.*.local
+
+# 本地运行时产物
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.db
+*.sqlite
+*.sqlite3
+
+# 受管归档与中间产物（真相源的二进制不提交）
+archive/
+data/
+work/
+out/
+
+# 系统
+.DS_Store
