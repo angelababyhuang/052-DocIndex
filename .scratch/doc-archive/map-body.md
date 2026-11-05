@@ -31,17 +31,18 @@
 - [视频与图片的云端 VLM/OCR 选型与视频抽帧策略](https://github.com/angelababyhuang/052-DocIndex/issues/5): 图片概述用免费 GLM-4V-Flash，OCR 用免费 PaddleOCR-VL-1.5 + RapidOCR 兜底，**视频由人写简介、不抽帧**。
 - [飞书查询入口：WeKnora 原生飞书渠道 vs 自建](https://github.com/angelababyhuang/052-DocIndex/issues/7): WeKnora 原生飞书渠道（websocket），/search 定位 + 问答附赠，先私聊后群聊，建应用清单后置。
 - [014 数据迁移与图片库落地的数据模型](https://github.com/angelababyhuang/052-DocIndex/issues/8): 图片/视频独立顶层实体（IMG/VID 各自 ID），文档单归属+关联项目标签，SQLite 真相源，014 全量只读迁移可回退。
+- [文件定位命令 /find 接入查询入口](https://github.com/angelababyhuang/052-DocIndex/issues/9): /find 延后开发（第二阶段），第一阶段用 014 cmd_find 兜底；将来走 MCP + 直接返回原始结果，开发前先实测验证。
 
 ## Not yet specified
 
-<!-- 前沿重新打开：#9 文件定位命令接入查询入口。其余是 spec 编写的字段级细节，属 handoff 内容。 -->
+<!-- 前沿已空：所有决策票（含 #9）已关闭。以下是 spec 编写的字段级细节，属 handoff 内容。 -->
 
 - 数据模型字段契约：`Image`/`Video`/`Document` 完整字段（继承 031 图片库字段 + caption/尺寸/时长等）
 - 关联项目标签在 SQLite 的存法（JSON 列 vs tag 表）与 WeKnora 标签映射
 - WeKnora 标签 → 检索过滤映射（项目/类别/图片/视频四类标签命名与多值语义）
 - 014 指纹复算校验脚本
 - 飞书建应用的开权限步骤清单（#7 决议的后置执行项）
-- **`/find` 文件定位命令接入查询入口（#9，前沿票）**：数据必须来自真相源 SQLite，不能从 WeKnora 派生索引拿
+- `/find` 文件定位命令（第二阶段，票 #9 已决议：MCP + 直接返回原始结果，开发前先实测验证）
 
 ## Out of scope
 
