@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from docarchive import imagelib
+from docarchive.caption import Captioner
 
 # 转换阶段的图片占位，登记后替换成 imagelib.image_ref() 的真实引用
 PLACEHOLDER = "{{IMG-%d}}"
@@ -74,6 +75,8 @@ class ConvertReport:
     markdown_path: str
     images_total: int
     images_new: int
+    captions_new: int = 0
+    caption_errors: tuple[str, ...] = ()
 
 
 # ---------------- 对外入口 ----------------
@@ -100,7 +103,9 @@ def convert_file(src: str | Path) -> Conversion:
 
 
 def convert_version(conn: sqlite3.Connection, version_id: int,
-                    archive_dir: str | Path) -> ConvertReport:
+                    archive_dir: str | Path, *,
+                    captioner: Captioner | None = None,
+                    recaption: bool = False) -> ConvertReport:
     """把一个版本转成 md、抽图入图片库、回写 versions.markdown_path。
 
     md 落在受管文件旁边（`doc-1/v3-方案.docx` → `doc-1/v3-方案.md`），
@@ -119,11 +124,18 @@ def convert_version(conn: sqlite3.Connection, version_id: int,
         raise ValueError(f"受管文件不存在: {src}")
 
     conv = convert_file(src)
+    doc = conn.execute(
+        "SELECT title, project_id FROM documents WHERE id=?", (v["document_id"],)
+    ).fetchone()
+    doc_project = doc["project_id"]
     md, total, new = conv.markdown, 0, 0
+    registered: list[tuple[int, ExtractedImage]] = []
     for i, img in enumerate(conv.images, 1):
         reg = imagelib.register_image(
             conn, archive_dir, img.data, ext=img.ext,
             source=v["archive_path"], original_name=img.original_name,
+            # pandoc 抽出来的媒体名是 rId20 这种，显示名用「文档标题 图N」更好认
+            name=f"{doc['title']} 图{i}",
         )
         md = md.replace(PLACEHOLDER % i, imagelib.image_ref(reg.code))
         total += 1
@@ -134,14 +146,32 @@ def convert_version(conn: sqlite3.Connection, version_id: int,
             "VALUES (?, ?, 'embedded', ?)",
             (v["document_id"], reg.id, img.position),
         )
+        # 内嵌图跟随文档的主归属；已有归属的（先作为独立图登记过）不被改动
+        if doc_project is not None:
+            conn.execute(
+                "UPDATE images SET project_id=? WHERE id=? AND project_id IS NULL",
+                (doc_project, reg.id),
+            )
+        registered.append((reg.id, img))
 
     md_rel = str(Path(v["archive_path"]).with_suffix(".md"))
     md_file = archive_dir / md_rel
     md_file.parent.mkdir(parents=True, exist_ok=True)
     md_file.write_text(md, encoding="utf-8")
     conn.execute("UPDATE versions SET markdown_path=? WHERE id=?", (md_rel, version_id))
-    conn.commit()
-    return ConvertReport(md_rel, total, new)
+    conn.commit()  # 先落库释放写锁，caption 的网络调用放到事务外
+
+    captions_new, caption_errors = 0, []
+    if captioner is not None:
+        for image_id, img in registered:
+            # ensure_caption 每次生成后自己 commit：下一张图的 HTTP 不落在写事务里
+            res = imagelib.ensure_caption(conn, image_id, img.data, img.ext,
+                                          captioner, force=recaption)
+            if res.generated:
+                captions_new += 1
+            if res.error:
+                caption_errors.append(f"{img.original_name}: {res.error}")
+    return ConvertReport(md_rel, total, new, captions_new, tuple(caption_errors))
 
 
 # ---------------- docx / .doc（pandoc） ----------------

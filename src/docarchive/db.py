@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS images(
   ext TEXT,
   original_name TEXT,
   source TEXT,                        -- 溯源：从哪个文件抽出/哪个微信文件
+  project_id INTEGER REFERENCES projects(id),  -- 单归属项目（可空，关联项目另存标签表）
   caption TEXT,                       -- 图片描述（VLM 生成）
   width INTEGER,
   height INTEGER,
@@ -97,6 +98,17 @@ CREATE TABLE IF NOT EXISTS document_project_tags(
   project_id INTEGER NOT NULL REFERENCES projects(id),
   PRIMARY KEY (document_id, project_id));
 
+-- 图片/视频的关联项目标签：媒体实体与文档平级，单归属之外可挂多个项目
+CREATE TABLE IF NOT EXISTS image_project_tags(
+  image_id INTEGER NOT NULL REFERENCES images(id),
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  PRIMARY KEY (image_id, project_id));
+
+CREATE TABLE IF NOT EXISTS video_project_tags(
+  video_id INTEGER NOT NULL REFERENCES videos(id),
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  PRIMARY KEY (video_id, project_id));
+
 -- 号段计数器：保证 IMG/VID 编号单调递增、删除不回收
 CREATE TABLE IF NOT EXISTS code_counters(
   prefix TEXT PRIMARY KEY,            -- 'IMG' | 'VID'
@@ -116,7 +128,7 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 def _migrate_columns(conn: sqlite3.Connection) -> None:
-    """幂等列迁移：给既有库补上后加的列（versions.markdown_path / images.path / videos 两列）。"""
+    """幂等列迁移：给既有库补上后加的列（images.path/project_id、videos 两列、versions.markdown_path）。"""
     def _cols(table: str) -> set[str]:
         return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
@@ -124,11 +136,21 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE images ADD COLUMN path TEXT")
     if "path" not in _cols("videos"):
         conn.execute("ALTER TABLE videos ADD COLUMN path TEXT")
+    if "project_id" not in _cols("images"):
+        conn.execute("ALTER TABLE images ADD COLUMN project_id INTEGER REFERENCES projects(id)")
     if "markdown_path" not in _cols("versions"):
         conn.execute("ALTER TABLE versions ADD COLUMN markdown_path TEXT")
     if "project_id" not in _cols("videos"):
         conn.execute("ALTER TABLE videos ADD COLUMN project_id INTEGER REFERENCES projects(id)")
     conn.commit()
+
+
+def get_or_create_project(conn: sqlite3.Connection, name: str) -> int:
+    """按名取项目 id，不存在则新建。不 commit（跟 next_code 一样由调用方定事务）。"""
+    row = conn.execute("SELECT id FROM projects WHERE name=?", (name,)).fetchone()
+    if row:
+        return row["id"]
+    return conn.execute("INSERT INTO projects(name) VALUES (?)", (name,)).lastrowid
 
 
 def next_code(conn: sqlite3.Connection, prefix: str, width: int = 4) -> str:

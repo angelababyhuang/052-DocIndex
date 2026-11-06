@@ -8,11 +8,15 @@
   merge <出现ID> --doc <文档ID> [--force]   确认为重复
   ignore <出现ID>   确认为忽略
   convert <版本ID>...   把版本转成 md（抽内嵌图入图片库）
+  register-image <文件> [--project 项目]   独立图入库（分配 IMG-ID + 生成 caption）
+  register-video <文件> [--project 项目]   视频登记（分配 VID-ID + 填简介）
+  set-intro <VID-0001> --intro 文本   改/补视频简介
+  media [--project 项目]   列出图片/视频
 """
 import argparse
 from pathlib import Path
 
-from docarchive import archive, convert, db, ingest, migrate
+from docarchive import archive, caption, convert, db, ingest, media, migrate
 
 
 def cmd_migrate(args):
@@ -78,10 +82,69 @@ def cmd_ignore(args):
 def cmd_convert(args):
     conn = db.connect(args.db)
     adir = _archive_dir(args.db)
+    cap = None if args.no_caption else caption.captioner_from_env()
     for vid in args.version_id:
-        r = convert.convert_version(conn, vid, adir)
+        r = convert.convert_version(conn, vid, adir, captioner=cap,
+                                    recaption=args.recaption)
         print(f"版本 #{vid} → {r.markdown_path}（图片 {r.images_total} 张，"
-              f"新入图片库 {r.images_new} 张）")
+              f"新入图片库 {r.images_new} 张，新描述 {r.captions_new} 条）")
+        for err in r.caption_errors:
+            print(f"  ⚠ 描述生成失败：{err}")
+    conn.close()
+
+
+def cmd_register_image(args):
+    conn = db.connect(args.db)
+    cap = None if args.no_caption else caption.captioner_from_env()
+    r = media.register_standalone_image(
+        conn, _archive_dir(args.db), args.file,
+        project=args.project, tags=args.tag or (), captioner=cap,
+        recaption=args.recaption,
+    )
+    print(f"图片 {args.file} → {r.code}（{'新入库' if r.created else '已存在，复用原编号'}）")
+    if r.caption:
+        print(f"  描述：{r.caption}")
+    elif r.caption_error:
+        print(f"  ⚠ 描述生成失败：{r.caption_error}")
+    elif cap is None:
+        print("  （没生成描述：未配置 CAPTION_API_KEY / ZHIPU_API_KEY，或用 --no-caption 跳过）")
+    conn.close()
+
+
+def cmd_register_video(args):
+    conn = db.connect(args.db)
+    r = media.register_video(
+        conn, _archive_dir(args.db), args.file,
+        project=args.project, tags=args.tag or (), intro=args.intro,
+    )
+    print(f"视频 {args.file} → {r.code}（{'新入库' if r.created else '已存在，复用原编号'}）")
+    if r.duration_seconds is not None:
+        print(f"  时长：{r.duration_seconds:g} 秒")
+    if r.intro:
+        print(f"  简介：{r.intro}")
+    conn.close()
+
+
+def cmd_set_intro(args):
+    conn = db.connect(args.db)
+    media.set_video_intro(conn, args.code, args.intro)
+    print(f"{args.code} 简介已更新")
+    conn.close()
+
+
+def cmd_media(args):
+    conn = db.connect(args.db)
+    ov = media.overview(conn, project=args.project, tag=args.tag)
+    print(f"图片 {len(ov['images'])} 张")
+    for i in ov["images"]:
+        tags = f"  [{i['tags']}]" if i["tags"] else ""
+        print(f"  {i['code']}  {i['name'] or '-'}  {i['project'] or '-'}{tags}"
+              f"  {i['caption'] or '（无描述）'}")
+    print(f"视频 {len(ov['videos'])} 个")
+    for v in ov["videos"]:
+        tags = f"  [{v['tags']}]" if v["tags"] else ""
+        print(f"  {v['code']}  {v['name'] or '-'}  {v['project'] or '-'}{tags}"
+              f"  {v['intro'] or '（无简介）'}")
     conn.close()
 
 
@@ -132,8 +195,39 @@ def main():
 
     p = sub.add_parser("convert", help="版本转 md + 抽内嵌图入图片库")
     p.add_argument("version_id", type=int, nargs="+", help="版本 ID（可多个）")
+    p.add_argument("--no-caption", action="store_true", help="不生成图片 caption")
+    p.add_argument("--recaption", action="store_true", help="已有描述也重新生成")
     p.add_argument("--db", type=Path, default=Path("data/truth.db"))
     p.set_defaults(func=cmd_convert)
+
+    p = sub.add_parser("register-image", help="独立图入库（IMG-#### + caption）")
+    p.add_argument("file", type=Path, help="图片文件路径")
+    p.add_argument("--project", default=None, help="主归属项目")
+    p.add_argument("--tag", action="append", help="关联项目标签（可重复）")
+    p.add_argument("--no-caption", action="store_true", help="不生成 caption")
+    p.add_argument("--recaption", action="store_true", help="已有描述也重新生成")
+    p.add_argument("--db", type=Path, default=Path("data/truth.db"))
+    p.set_defaults(func=cmd_register_image)
+
+    p = sub.add_parser("register-video", help="视频登记（VID-####）")
+    p.add_argument("file", type=Path, help="视频文件路径")
+    p.add_argument("--project", default=None, help="主归属项目")
+    p.add_argument("--tag", action="append", help="关联项目标签（可重复）")
+    p.add_argument("--intro", default=None, help="简介（人填）")
+    p.add_argument("--db", type=Path, default=Path("data/truth.db"))
+    p.set_defaults(func=cmd_register_video)
+
+    p = sub.add_parser("set-intro", help="改/补视频简介")
+    p.add_argument("code", help="视频编号，如 VID-0001")
+    p.add_argument("--intro", required=True, help="简介文本")
+    p.add_argument("--db", type=Path, default=Path("data/truth.db"))
+    p.set_defaults(func=cmd_set_intro)
+
+    p = sub.add_parser("media", help="列出图片/视频")
+    p.add_argument("--project", default=None, help="只看某主归属项目")
+    p.add_argument("--tag", default=None, help="只看挂了某关联标签的")
+    p.add_argument("--db", type=Path, default=Path("data/truth.db"))
+    p.set_defaults(func=cmd_media)
 
     args = ap.parse_args()
     args.func(args)

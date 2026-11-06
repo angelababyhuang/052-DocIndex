@@ -12,4 +12,5 @@ anydoc>=0.0.0; python_version < "3.11"   # textutil 不可用时的正文指纹�
 markitdown[docx,pdf,xlsx]>=0.1.5   # 文本型 PDF / xlsx → markdown、docx 指纹兜底
 python-pptx>=1.0       # pptx 读文本/表格/图表/图片（pandoc 无 pptx reader）
 PyMuPDF>=1.24          # PDF 文字层判定 + 逐页渲染给 OCR
+Pillow>=10.1           # 图片宽高（图片库元数据）、测试造样例
 rapidocr-onnxruntime>=1.4   # 扫描版 PDF 离线 OCR（模型随包，不联网）

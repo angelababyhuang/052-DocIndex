@@ -27,6 +27,8 @@ def test_schema_creates_all_tables(conn):
         "videos",
         "document_images",
         "document_project_tags",
+        "image_project_tags",
+        "video_project_tags",
         "code_counters",
     }
 

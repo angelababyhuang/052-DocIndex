@@ -24,6 +24,8 @@ def migrate(src_db: Path, dst_conn: sqlite3.Connection) -> dict:
     # 幂等：重跑前清空目标库实体表（可回退 = 作废重来）
     dst_conn.executescript("""
     DELETE FROM document_project_tags;
+    DELETE FROM image_project_tags;
+    DELETE FROM video_project_tags;
     DELETE FROM document_images;
     DELETE FROM occurrences;
     DELETE FROM versions;

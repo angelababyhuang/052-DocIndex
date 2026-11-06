@@ -529,3 +529,122 @@ def test_text_fp_falls_back_when_textutil_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", no_textutil)
     fp = fingerprint.compute_text_fp(docx, ".docx")
     assert fp is not None and len(fp) == 64
+
+
+@needs_pandoc
+@needs_pil
+def test_convert_version_captions_embedded_images(conn, archive_dir, tmp_path):
+    """内嵌图也要有 caption（spec §6.2），已有描述的第二次不再调模型。"""
+    class FakeCapture:
+        def __init__(self):
+            self.calls = 0
+
+        def describe(self, data, ext=None):
+            self.calls += 1
+            return "一张连杆示意图"
+
+    docx, _ = _make_docx(tmp_path)
+    occ = _pending(conn, docx)
+    _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
+    cap = FakeCapture()
+
+    r1 = convert.convert_version(conn, vid, archive_dir, captioner=cap)
+    assert r1.captions_new == 1
+    assert conn.execute("SELECT caption FROM images").fetchone()["caption"] == "一张连杆示意图"
+
+    r2 = convert.convert_version(conn, vid, archive_dir, captioner=cap)
+    assert r2.captions_new == 0
+    assert cap.calls == 1
+
+
+@needs_pandoc
+@needs_pil
+def test_embedded_image_inherits_document_project(conn, archive_dir, tmp_path):
+    docx, _ = _make_docx(tmp_path)
+    occ = _pending(conn, docx)
+    _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
+    convert.convert_version(conn, vid, archive_dir)
+    row = conn.execute(
+        "SELECT p.name FROM images i JOIN projects p ON p.id = i.project_id"
+    ).fetchone()
+    assert row["name"] == "浮标项目"
+
+
+@needs_pandoc
+@needs_pil
+def test_embedded_image_gets_readable_display_name(conn, archive_dir, tmp_path):
+    """pandoc 的媒体名（rId20）不适合当显示名，用「文档标题 图N」。"""
+    docx, _ = _make_docx(tmp_path)
+    occ = _pending(conn, docx)
+    _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
+    convert.convert_version(conn, vid, archive_dir)
+    # 文档标题来自文件名（sample.docx → sample），不是 docx 里的 H1
+    assert conn.execute("SELECT name FROM images").fetchone()["name"] == "sample 图1"
+
+
+@needs_pandoc
+@needs_pil
+def test_convert_reports_caption_errors(conn, archive_dir, tmp_path):
+    """caption 失败要回执到报告里（CLI 会逐条打印），不能静默。"""
+    class BadCapturer:
+        def describe(self, data, ext=None):
+            raise RuntimeError("模型接口返回 401")
+
+    docx, _ = _make_docx(tmp_path)
+    occ = _pending(conn, docx)
+    _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
+
+    r = convert.convert_version(conn, vid, archive_dir, captioner=BadCapturer())
+    assert r.captions_new == 0
+    assert r.caption_errors and "401" in r.caption_errors[0]
+    assert conn.execute("SELECT caption FROM images").fetchone()["caption"] is None
+
+
+@needs_pandoc
+@needs_pil
+def test_convert_recaption_regenerates_embedded(conn, archive_dir, tmp_path):
+    class FixedCaptioner:
+        def __init__(self, text):
+            self.text = text
+
+        def describe(self, data, ext=None):
+            return self.text
+
+    docx, _ = _make_docx(tmp_path)
+    occ = _pending(conn, docx)
+    _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
+
+    convert.convert_version(conn, vid, archive_dir, captioner=FixedCaptioner("旧描述"))
+    r = convert.convert_version(conn, vid, archive_dir,
+                                captioner=FixedCaptioner("新描述"), recaption=True)
+    assert r.captions_new == 1
+    assert conn.execute("SELECT caption FROM images").fetchone()["caption"] == "新描述"
+
+
+@needs_pptx
+@needs_pil
+def test_caption_http_happens_outside_write_transaction(conn, archive_dir, tmp_path):
+    """补描述时不能占着 SQLite 写事务：否则第 2..N 张图的 HTTP 会一直锁库。"""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    for i, name in enumerate(("a.png", "b.png")):
+        pic = _png(tmp_path / name, name)
+        slide.shapes.add_picture(str(pic), Inches(1 + i * 2), Inches(1), width=Inches(1))
+    deck = tmp_path / "deck.pptx"
+    prs.save(str(deck))
+    occ = _pending(conn, deck)
+    _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
+
+    seen = []
+
+    class Probe:
+        def describe(self, data, ext=None):
+            seen.append(conn.in_transaction)
+            return "描述"
+
+    convert.convert_version(conn, vid, archive_dir, captioner=Probe())
+    assert len(seen) == 2
+    assert not any(seen), "调用模型时仍有未提交的写事务"

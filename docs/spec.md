@@ -35,16 +35,18 @@
 |---|---|
 | 向量库 / 检索 / 问答 | 腾讯云 Lighthouse 官方 WeKnora 镜像（4核8GB，245 元/月） |
 | 图片/视频文件存储 | 腾讯云 COS |
-| 图片概述（caption） | WeKnora 已配 `qwen3.8-flash`（阿里云百炼 VLM，supports_vision） |
-| OCR（扫描件） | WeKnora 已配 `qwen3.8-flash`（VLM）+ 本机 RapidOCR 离线兜底 |
+| 图片概述（caption） | 独立视觉模型 `glm-4v-flash`（智谱，免费；OpenAI 兼容接口，模型可配） |
+| OCR（扫描件） | 本机 RapidOCR 离线（一期）；WeKnora 已配 `qwen3.8-flash`（VLM，二期接入做增强） |
 | 文本 embedding | WeKnora 已配 `text-embedding-v4`（阿里云百炼，2048 维） |
 | 问答 | WeKnora 已配 `deepseek-flash` |
 | 重排 | WeKnora 已配 `qwen3.7-text-rerank` |
 | 现有三台机器 | 只做开发与客户端，不承担推理/存储职责 |
 
-> 说明（2026-11-06 用户拍板）：WeKnora 实例里已配好阿里云百炼四件套（embedding/问答/重排/视觉），全部沿用现有配置，不改。spec 早期写的 bge-m3 / GLM-4V-Flash / PaddleOCR-VL 作废，统一用 WeKnora 已配模型。
+> 说明（2026-11-06 用户拍板）：WeKnora 实例里已配好阿里云百炼四件套（embedding/问答/重排/视觉），全部沿用现有配置，不改。spec 早期写的 bge-m3 / GLM-4V-Flash / PaddleOCR-VL 作废，统一用 WeKnora 已配模型（**caption 例外**：2026-11-06 #14 补充拍板改为独立视觉模型，见下一条）。
 >
 > 一期（#13）先落地**本机 RapidOCR**：转换要能离线跑、不依赖 WeKnora 在线。qwen3.8-flash VLM 作为增强，等 #15/#16 接入 WeKnora 后再接（见 `docs/adr/0001`）。
+>
+> caption 的补充拍板（2026-11-06，#14）：**caption 改由独立视觉模型生成（一期 `glm-4v-flash`）**，不再等 WeKnora。理由：WeKnora 的视觉模型只在它自己的索引管线里跑，没有「描述单张图」的对外接口；caption 是真相源字段，必须能脱开派生索引独立重建。模型走 OpenAI 兼容接口，`CAPTION_MODEL`/`CAPTION_BASE_URL` 可换（见 `docs/adr/0002`）。OCR 口径不变，仍是本机 RapidOCR 一期。
 
 现有三台机器（MBP M5 Pro 64G / Mac mini M6 16G / Windows i7 + RTX 3070 8G）在第一阶段不承担推理/存储职责。
 
@@ -98,8 +100,8 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 
 | 实体 | 含义 | 关键字段 |
 |---|---|---|
-| **图片 Image** | 去重后的独立图片实体 | `IMG-####`（内容 sha256 去重、永不改号）、名称、sha256、字节、扩展名、原始名、来源、caption（qwen3.8-flash 生成）、尺寸 |
-| **视频 Video** | 视频实体 | `VID-####`、名称、sha256、字节、扩展名、简介（**人填**）、时长、来源 |
+| **图片 Image** | 去重后的独立图片实体 | `IMG-####`（内容 sha256 去重、永不改号）、名称、sha256、字节、扩展名、原始名、来源、caption（VLM 生成）、尺寸、主归属项目 |
+| **视频 Video** | 视频实体 | `VID-####`、名称、sha256、字节、扩展名、简介（**人填**）、时长、来源、主归属项目 |
 
 图片库字段继承 031 的 ADR-0001/0002：`IMG-0001` 起四位数字按内容 sha256 去重后顺序分配，ID 与内容绑定、永不改号、永不复用，单一母本 + 登记表，引用只认 `{{IMG-0001}}`。052 的登记表就是真相源的 `images` 表（不再另存 031 的 `索引.tsv`，避免双源漂移）。
 
@@ -108,6 +110,7 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 | 关联 | 表达 | 说明 |
 |---|---|---|
 | 文档 ↔ 图片 | `document_images`（document_id + image_id + 内嵌/独立标记 + 位置） | 内嵌图（文档转 md 时抽出）与独立图（微信收到的截图）都要记 |
+| 图片/视频 ↔ 项目 | **单归属 + 关联项目标签** | `images.project_id` / `videos.project_id` 是主项目，关联项目挂 `image_project_tags` / `video_project_tags`，与文档同一套语义；主归属一旦定下，后来的登记不改 |
 | 图片溯源 | Image 的 `来源` 字段 | 记「从哪个文件抽出来」，与关联表用途不同（溯源 vs 导航） |
 | 文档 ↔ 关联项目 | **单归属 + 关联项目标签** | 文档有一个主 `project_id`，其他关联项目作为多值标签挂在旁 |
 | 视频 ↔ 项目/文档 | 同文档（单归属 + 关联标签） | 视频与文档平级独立实体 |
@@ -116,7 +119,7 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 
 - **SQLite 数据库**：单一真相源，所有实体（文档/图片/视频/项目/关联）都在库里。
 - **图片/视频二进制**：文件系统（开发期）或 COS（云端），SQLite 存 URL/路径。
-- **md 派生物**：每个版本转出的 md 与受管文件同位（`doc-<ID>/v<版本ID>-<文件名>.md`），路径记在 `versions.markdown_path`；图片母本统一放 `archive/images/IMG-####.<ext>`，`images.path` 存相对受管目录的路径。
+- **md 派生物**：每个版本转出的 md 与受管文件同位（`doc-<ID>/v<版本ID>-<文件名>.md`），路径记在 `versions.markdown_path`；图片母本统一放 `archive/images/IMG-####.<ext>`，视频母本放 `archive/videos/VID-####.<ext>`，`images.path` / `videos.path` 存相对受管目录的路径。
 - 关联项目标签的存法（JSON 列 vs 独立 tag 表）与 WeKnora 标签映射，见 §6.3。
 
 ## 5. 摄入与去重管道
@@ -179,7 +182,7 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 ### 7.1 检索架构（第一阶段）
 
 - **纯文本检索**：WeKnora dense（`text-embedding-v4`，2048 维）+ BM25（ParadeDB 自带 jieba）。
-- **图片后置 caption**：图片不进向量库，caption（文本）走普通检索。
+- **图片后置 caption**：图片不进向量库，caption（文本）走普通检索。caption 由独立的视觉模型生成（一期 GLM-4V-Flash，见 `docs/adr/0002`），失败的图仍按编号/项目可查。
 - **视频**：人写简介，简介文本走普通检索。
 
 ### 7.2 embedding 选型
@@ -250,7 +253,8 @@ WeKnora 自带前端，绑到内网 IP。
 | 转换 | pandoc 3.5 + markitdown + python-pptx + RapidOCR（本机已装） |
 | 向量/检索 | 云端 WeKnora（Lighthouse 镜像）+ text-embedding-v4 |
 | 对象存储 | 腾讯云 COS |
-| VLM（图片概述 + OCR） | WeKnora 已配 qwen3.8-flash（阿里云百炼）+ 本机 RapidOCR 兜底 |
+| VLM（图片概述） | 独立调用 `glm-4v-flash`（智谱，OpenAI 兼容，模型可配） |
+| OCR（扫描件） | 本机 RapidOCR 离线（一期）；WeKnora 的 qwen3.8-flash 待 #15 接入后作为增强 |
 | 查询 | WeKnora 原生飞书渠道 + 自带 Web UI |
 
 ## 12. 待 spec 定稿的字段级细节

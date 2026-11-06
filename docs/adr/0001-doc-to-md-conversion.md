@@ -65,9 +65,9 @@ RapidOCR，判定为扫描版/无文字层的页逐页渲染后识别；VLM 作�
 - 转换器有系统/三方依赖（pandoc、PyMuPDF、RapidOCR、python-pptx、markitdown）。
   缺依赖时给出可读的 `RuntimeError`，测试按依赖可用性跳过，不让整套测试挂掉。
 - `.doc` 依赖 macOS 的 textutil，Linux 上暂不支持，属于已知缺口。
-- **caption / 宽高留给 #14**：转换只管「抽出图片 + 分配 IMG-ID + 记来源/位置」。
-  caption（VLM 生成）和尺寸是媒体实体登记的活，等 #14 落库时补齐，
-  md 的检索价值先靠正文。
+- **caption / 宽高由 #14 补齐**：本 ADR 落地时转换只管「抽出图片 + 分配 IMG-ID +
+  记来源/位置」；#14 之后 `convert_version(captioner=...)` 会顺手补 caption，
+  图片宽高由 `imagelib.register_image` 记录（见 ADR-0002）。
 - **不另存 031 式的 `索引.tsv`**：052 的图片登记表就是真相源的 `images` 表。
   多写一份 tsv 就是双源，迟早漂移（spec 开篇点名的头号失败原因）。
 - pptx 的**图表**数据会转成 md 表（spec §6.1 要求读图表），**演讲者备注**也随

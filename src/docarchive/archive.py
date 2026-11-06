@@ -9,6 +9,8 @@ import sqlite3
 import zipfile
 from pathlib import Path
 
+from docarchive import db
+
 STATUS_CN = {"pending": "待处理", "archived": "已归", "merged": "已并", "ignored": "已忽略"}
 CATEGORIES = ["研发", "测试", "管理", "商务", "资料"]
 
@@ -48,15 +50,6 @@ def get_occ(conn: sqlite3.Connection, oid: int) -> sqlite3.Row:
     return r
 
 
-def get_project(conn: sqlite3.Connection, name: str) -> int:
-    """按名取项目 id，不存在则新建。"""
-    p = conn.execute("SELECT id FROM projects WHERE name=?", (name,)).fetchone()
-    if p:
-        return p["id"]
-    cur = conn.execute("INSERT INTO projects(name) VALUES (?)", (name,))
-    return cur.lastrowid
-
-
 def _finish(conn: sqlite3.Connection, occ: sqlite3.Row, status: str,
             doc_id: int | None, version_id: int | None, note: str | None = None) -> None:
     conn.execute(
@@ -70,7 +63,7 @@ def new_doc(conn: sqlite3.Connection, oid: int, project: str, archive_dir: Path,
             title: str | None = None, category: str | None = None) -> tuple[int, int]:
     """确认一条出现为新文档：建 document + version + 复制进受管目录。"""
     occ = get_occ(conn, oid)
-    pid = get_project(conn, project)
+    pid = db.get_or_create_project(conn, project)
     title = title or Path(occ["file_name"]).stem
     if category is not None and category not in CATEGORIES:
         raise ValueError(f"类别必须是: {'/'.join(CATEGORIES)}")
