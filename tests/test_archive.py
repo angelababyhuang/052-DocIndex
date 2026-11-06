@@ -118,3 +118,38 @@ def test_schema_has_media_storage_columns(conn):
         assert col in [r[1] for r in conn.execute("PRAGMA table_info(images)")]
     for col in ("path", "project_id"):
         assert col in [r[1] for r in conn.execute("PRAGMA table_info(videos)")]
+
+
+# ---------- 票 #20：媒体文件不能被 new-doc 收编 ----------
+
+def test_new_doc_refuses_image_occurrence(conn, archive_dir, tmp_path):
+    """图片出现走 new-doc 只会产出「convert 才发现不支持」的半成品，直接拒绝。"""
+    src = tmp_path / "shot.png"
+    src.write_bytes(b"fake png bytes")
+    occ = _make_occ(conn, source_path=str(src), file_name="shot.png")
+
+    with pytest.raises(ValueError, match="register-image"):
+        archive.new_doc(conn, occ["id"], "P", archive_dir)
+
+    # 拒绝要彻底：不建文档、不复制、出现仍是 pending
+    assert conn.execute("SELECT count(*) FROM documents").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM versions").fetchone()[0] == 0
+    assert list(archive_dir.rglob("v*")) == []
+    assert conn.execute("SELECT status FROM occurrences").fetchone()["status"] == "pending"
+
+
+def test_new_doc_refuses_video_occurrence(conn, archive_dir, tmp_path):
+    src = tmp_path / "demo.mp4"
+    src.write_bytes(b"fake mp4 bytes")
+    occ = _make_occ(conn, source_path=str(src), file_name="demo.mp4")
+
+    with pytest.raises(ValueError, match="register-video"):
+        archive.new_doc(conn, occ["id"], "P", archive_dir)
+
+
+def test_new_doc_still_accepts_documents(conn, archive_dir, tmp_path):
+    src = tmp_path / "a.docx"
+    src.write_bytes(b"docx bytes")
+    occ = _make_occ(conn, source_path=str(src), file_name="a.docx")
+    doc_id, vid = archive.new_doc(conn, occ["id"], "P", archive_dir)
+    assert doc_id and vid

@@ -60,11 +60,11 @@ def test_cli_scan_since_skips_non_date_dirs_and_all_includes_them(tmp_path, monk
 
     run_cli(monkeypatch, "scan", str(inbox), "--since", "2026-11-04", "--db", str(db_path))
     out = capsys.readouterr().out
-    assert "新登记 1 条" in out and "a.txt" not in out
+    assert "文档 1" in out and "a.txt" not in out
 
     run_cli(monkeypatch, "scan", str(inbox), "--all", "--db", str(db_path))
     out = capsys.readouterr().out
-    assert "新登记 1 条" in out and "a.txt" in out
+    assert "文档 1" in out and "a.txt" in out
 
 
 def test_cli_scan_since_and_all_are_mutually_exclusive(db_path, monkeypatch, tmp_path):
@@ -86,7 +86,7 @@ def test_cli_scan_hints_when_only_non_date_dirs_matched(tmp_path, monkeypatch, c
 
     run_cli(monkeypatch, "scan", str(inbox), "--since", "2026-11-04", "--db", str(db_path))
     out = capsys.readouterr().out
-    assert "新登记 0 条" in out
+    assert "文档 0" in out
     assert "备份" in out and "--all" in out
 
 
@@ -95,7 +95,86 @@ def test_cli_scan_date_dir_as_root_works(tmp_path, monkeypatch, capsys, db_path)
     d.mkdir(parents=True)
     (d / "a.txt").write_text("x")
     run_cli(monkeypatch, "scan", str(d), "--since", "2026-11-04", "--db", str(db_path))
-    assert "新登记 1 条" in capsys.readouterr().out
+    assert "文档 1" in capsys.readouterr().out
+
+
+# ---------- #20：scan 媒体分流 ----------
+
+def _mixed_inbox(tmp_path):
+    from support import make_png, make_video
+
+    inbox = tmp_path / "inbox"
+    (inbox / "2026-11-05").mkdir(parents=True)
+    (inbox / "2026-11-05" / "方案.docx").write_bytes(b"docx bytes")
+    make_png(inbox / "2026-11-05" / "shot.png")
+    make_video(inbox / "2026-11-05" / "demo.mp4")
+    return inbox
+
+
+def test_cli_scan_routes_media_and_prints_breakdown(tmp_path, monkeypatch, capsys, db_path):
+    pytest.importorskip("PIL")
+    inbox = _mixed_inbox(tmp_path)
+
+    run_cli(monkeypatch, "scan", str(inbox), "--project", "浮标项目", "--tag", "测试",
+            "--db", str(db_path))
+    out = capsys.readouterr().out
+    assert "文档 1" in out
+    assert "图片 1（新 1）" in out
+    assert "视频 1（新 1）" in out
+
+    # 截图/录屏真的进了媒体库，且带上了本次 scan 的项目/标签
+    run_cli(monkeypatch, "media", "--project", "浮标项目", "--db", str(db_path))
+    out = capsys.readouterr().out
+    assert "IMG-0001" in out and "VID-0001" in out and "[测试]" in out
+
+
+def test_cli_scan_no_media_falls_back_to_occurrence(tmp_path, monkeypatch, capsys, db_path):
+    pytest.importorskip("PIL")
+    from support import make_png
+
+    inbox = tmp_path / "inbox"
+    (inbox / "2026-11-05").mkdir(parents=True)
+    make_png(inbox / "2026-11-05" / "shot.png")
+
+    run_cli(monkeypatch, "scan", str(inbox), "--no-media", "--db", str(db_path))
+    out = capsys.readouterr().out
+    assert "文档 1" in out and "图片 0（新 0）" in out
+
+    run_cli(monkeypatch, "media", "--db", str(db_path))
+    assert "图片 0 张" in capsys.readouterr().out
+
+
+def test_cli_new_doc_on_media_exits_with_guidance(tmp_path, monkeypatch, capsys, db_path):
+    pytest.importorskip("PIL")
+    from support import make_png
+
+    inbox = tmp_path / "inbox"
+    (inbox / "2026-11-05").mkdir(parents=True)
+    make_png(inbox / "2026-11-05" / "shot.png")
+    run_cli(monkeypatch, "scan", str(inbox), "--no-media", "--db", str(db_path))
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as ei:
+        run_cli(monkeypatch, "new-doc", "1", "--project", "浮标项目", "--db", str(db_path))
+    msg = str(ei.value)
+    assert "register-image" in msg and "register-video" in msg
+
+
+def test_cli_scan_no_caption_skips_model(tmp_path, monkeypatch, capsys, db_path):
+    """--no-caption 时不拿 captioner（KEY 配了也不调模型）。"""
+    pytest.importorskip("PIL")
+    from support import make_png
+
+    calls = []
+    monkeypatch.setattr(cli.caption, "captioner_from_env",
+                        lambda *a, **k: calls.append(1) or None)
+    inbox = tmp_path / "inbox"
+    (inbox / "2026-11-05").mkdir(parents=True)
+    make_png(inbox / "2026-11-05" / "shot.png")
+
+    run_cli(monkeypatch, "scan", str(inbox), "--no-caption", "--db", str(db_path))
+    assert calls == []
+    assert "IMG-0001" not in capsys.readouterr().out  # scan 的自述里不逐条列媒体
 
 
 # ---------- #15：index / search ----------

@@ -1,7 +1,9 @@
-"""票 #12：摄入与去重管道。"""
+"""票 #12：摄入与去重管道；票 #20：scan 把媒体分流入库。"""
 import hashlib
+from pathlib import Path
 
 import pytest
+from support import make_png, make_video
 
 from docarchive import ingest
 
@@ -117,8 +119,153 @@ def test_scan_dir_registers_files(tmp_path, conn):
     f2 = d / "2026-09-01" / "b.txt"
     f2.write_text("world")
     n = ingest.scan_dir(conn, d, source_type="wechat")
-    assert n == 2
+    assert n.occurrences == 2
+    assert n.images == n.images_new == n.videos == n.videos_new == 0
     assert conn.execute("SELECT count(*) FROM occurrences").fetchone()[0] == 2
+
+
+# ---------- 票 #20：媒体文件不登记出现，直接进媒体库 ----------
+
+class FakeCaptioner:
+    """测试用 captioner：只记录调用，绝不联网。"""
+
+    def __init__(self, text="一张微信截图。"):
+        self.text = text
+        self.calls = 0
+
+    def describe(self, data, ext=None):
+        self.calls += 1
+        return self.text
+
+
+def _date_file(root: Path, name: str, text: str = "x") -> Path:
+    p = root / "2026-11-05" / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_scan_routes_image_straight_to_library(conn, archive_dir, inbox):
+    (inbox / "2026-11-05").mkdir(parents=True)
+    make_png(inbox / "2026-11-05" / "shot.png")
+
+    stats = ingest.scan_dir(conn, inbox, archive_dir=archive_dir)
+
+    assert (stats.occurrences, stats.images, stats.images_new) == (0, 1, 1)
+    img = conn.execute("SELECT * FROM images").fetchone()
+    assert img["code"] == "IMG-0001"
+    assert img["source"] == str(inbox / "2026-11-05" / "shot.png")
+    assert (archive_dir / img["path"]).exists()
+    # 媒体不产生出现：triage 队列里只有文档
+    assert conn.execute("SELECT count(*) FROM occurrences").fetchone()[0] == 0
+
+
+def test_scan_routes_video_straight_to_library(conn, archive_dir, inbox):
+    (inbox / "2026-11-05").mkdir(parents=True)
+    make_video(inbox / "2026-11-05" / "demo.mp4")
+
+    stats = ingest.scan_dir(conn, inbox, archive_dir=archive_dir)
+
+    assert (stats.occurrences, stats.videos, stats.videos_new) == (0, 1, 1)
+    assert conn.execute("SELECT code FROM videos").fetchone()["code"] == "VID-0001"
+    assert conn.execute("SELECT count(*) FROM occurrences").fetchone()[0] == 0
+
+
+def test_scan_mixed_dir_splits_docs_and_media(conn, archive_dir, inbox):
+    _date_file(inbox, "方案.docx", "docx bytes")
+    make_png(inbox / "2026-11-05" / "shot.png")
+    make_video(inbox / "2026-11-05" / "demo.mp4")
+
+    stats = ingest.scan_dir(conn, inbox, archive_dir=archive_dir)
+
+    assert (stats.occurrences, stats.images, stats.videos) == (1, 1, 1)
+    assert {r["file_name"] for r in conn.execute("SELECT file_name FROM occurrences")} == {"方案.docx"}
+    assert conn.execute("SELECT count(*) FROM images").fetchone()[0] == 1
+    assert conn.execute("SELECT count(*) FROM videos").fetchone()[0] == 1
+
+
+def test_scan_same_image_in_two_date_dirs_gets_one_img_code(conn, archive_dir, inbox):
+    """同一张图出现在两个日期目录：sha256 去重，只分配一次编号，第二次 created=False。"""
+    first = inbox / "2026-11-05" / "shot.png"
+    first.parent.mkdir(parents=True)
+    make_png(first)
+    data = first.read_bytes()
+    second = inbox / "2026-11-06" / "shot.png"
+    second.parent.mkdir(parents=True)
+    second.write_bytes(data)
+
+    stats = ingest.scan_dir(conn, inbox, archive_dir=archive_dir)
+
+    assert (stats.images, stats.images_new) == (2, 1)  # 看到两次，只新入库一次
+    assert conn.execute("SELECT count(*) FROM images").fetchone()[0] == 1
+    assert conn.execute("SELECT code FROM images").fetchone()["code"] == "IMG-0001"
+
+
+def test_scan_no_media_keeps_old_occurrence_path(conn, archive_dir, inbox):
+    """--no-media：媒体退回普通出现，进 triage 队列（旧行为）。"""
+    (inbox / "2026-11-05").mkdir(parents=True)
+    make_png(inbox / "2026-11-05" / "shot.png")
+
+    stats = ingest.scan_dir(conn, inbox, archive_dir=archive_dir, route_media=False)
+
+    assert (stats.occurrences, stats.images, stats.videos) == (1, 0, 0)
+    assert conn.execute("SELECT count(*) FROM images").fetchone()[0] == 0
+    assert conn.execute("SELECT ext FROM occurrences").fetchone()["ext"] == ".png"
+
+
+def test_scan_media_applies_project_and_tags(conn, archive_dir, inbox):
+    (inbox / "2026-11-05").mkdir(parents=True)
+    make_png(inbox / "2026-11-05" / "shot.png")
+    make_video(inbox / "2026-11-05" / "demo.mp4")
+
+    ingest.scan_dir(conn, inbox, archive_dir=archive_dir,
+                    project="浮标项目", tags=["测试"])
+
+    img = conn.execute("SELECT * FROM images").fetchone()
+    pid = conn.execute("SELECT id FROM projects WHERE name='浮标项目'").fetchone()["id"]
+    assert img["project_id"] == pid
+    tag_names = [r["name"] for r in conn.execute(
+        "SELECT p.name FROM image_project_tags t JOIN projects p ON p.id=t.project_id")]
+    assert tag_names == ["测试"]
+    vid = conn.execute("SELECT * FROM videos").fetchone()
+    assert vid["project_id"] == pid
+    assert [r["name"] for r in conn.execute(
+        "SELECT p.name FROM video_project_tags t JOIN projects p ON p.id=t.project_id")] == ["测试"]
+
+
+def test_scan_media_passes_captioner_to_images(conn, archive_dir, inbox):
+    (inbox / "2026-11-05").mkdir(parents=True)
+    make_png(inbox / "2026-11-05" / "shot.png")
+    make_video(inbox / "2026-11-05" / "demo.mp4")  # 视频不该调 vision 模型
+    fake = FakeCaptioner("一张终端截图。")
+
+    ingest.scan_dir(conn, inbox, archive_dir=archive_dir, captioner=fake)
+
+    assert fake.calls == 1
+    assert conn.execute("SELECT caption FROM images").fetchone()["caption"] == "一张终端截图。"
+
+
+def test_scan_since_filters_before_media_routing(conn, archive_dir, inbox):
+    """--since 先筛日期目录，被筛掉的目录里的媒体也不入库。"""
+    first = inbox / "2026-11-03" / "old.png"
+    first.parent.mkdir(parents=True)
+    make_png(first)
+    second = inbox / "2026-11-05" / "new.png"
+    second.parent.mkdir(parents=True)
+    make_png(second, "NEW")
+
+    stats = ingest.scan_dir(conn, inbox, archive_dir=archive_dir, since="2026-11-04")
+
+    assert (stats.images, stats.images_new) == (1, 1)
+    assert conn.execute("SELECT source FROM images").fetchone()["source"] == str(second)
+
+
+def test_scan_media_without_archive_dir_raises(conn, inbox):
+    """开媒体分流却不知道受管目录 → 直接报错，别静默丢掉媒体。"""
+    (inbox / "2026-11-05").mkdir(parents=True)
+    make_png(inbox / "2026-11-05" / "shot.png")
+    with pytest.raises(ValueError, match="archive_dir"):
+        ingest.scan_dir(conn, inbox)
 
 
 # ---------- 票 #19：--since 只放行标准日期目录 ----------
@@ -139,7 +286,7 @@ def test_scan_since_skips_non_date_dirs(conn, inbox):
     _file(inbox / "待整理" / "c.txt")
 
     n = ingest.scan_dir(conn, inbox, since="2026-11-04")
-    assert n == 1
+    assert n.occurrences == 1
     assert _names(conn) == {"a.txt"}
 
 
@@ -174,7 +321,7 @@ def test_scan_all_includes_non_date_dirs_and_root_files(conn, inbox):
     _file(inbox / "top.txt")
 
     n = ingest.scan_dir(conn, inbox, all_files=True)
-    assert n == 3
+    assert n.occurrences == 3
     assert _names(conn) == {"a.txt", "b.txt", "top.txt"}
 
 
@@ -195,7 +342,7 @@ def test_scan_date_dir_itself_as_root(conn, tmp_path):
     d = tmp_path / "2026-11-05"
     _file(d / "a.txt")
     n = ingest.scan_dir(conn, d, since="2026-11-04")
-    assert n == 1 and _names(conn) == {"a.txt"}
+    assert n.occurrences == 1 and _names(conn) == {"a.txt"}
 
 
 def test_is_date_dir_rejects_lookalikes():

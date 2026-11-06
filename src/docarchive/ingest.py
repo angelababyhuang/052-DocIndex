@@ -1,17 +1,39 @@
-"""摄入与去重：扫描目录登记出现，三层指纹去重给建议。"""
+"""摄入与去重：扫描目录登记出现，三层指纹去重给建议。
+
+票 #20：媒体（图片/视频）不再登记成出现，scan 直接把它们送进媒体库；
+出现只留给需要人工 triage 的文档。见 docs/adr/0004。
+"""
 from __future__ import annotations
 
 import re
 import sqlite3
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
-from docarchive import fingerprint
+from docarchive import fingerprint, media
+from docarchive.caption import Captioner
 
 SKIP_NAMES = {".DS_Store"}
 
 # 日期目录：YYYY-MM-DD（补零）。字典序即时间序，所以比较直接用字符串。
 _DATE_DIR_RE = re.compile(r"[0-9]{4}-([0-9]{2})-([0-9]{2})")
+
+
+@dataclass(frozen=True)
+class ScanStats:
+    """一次扫描的结果。
+
+    出现（occurrences）进 triage 队列；媒体（images/videos）直接进媒体库，
+    带 * _new 的字段表示这次真正新入库的数量（重复登记只计数、不加新实体）。
+    """
+
+    occurrences: int = 0
+    images: int = 0
+    images_new: int = 0
+    videos: int = 0
+    videos_new: int = 0
 
 
 def is_date_dir(name: str) -> bool:
@@ -103,8 +125,19 @@ def suggestion(conn: sqlite3.Connection, byte_hash: str | None,
 
 
 def scan_dir(conn: sqlite3.Connection, src: Path, source_type: str = "wechat",
-             since: str | None = None, all_files: bool = False) -> int:
-    """扫描目录登记出现（含 zip 展开）。返回新登记数。
+             since: str | None = None, all_files: bool = False, *,
+             archive_dir: str | Path | None = None, project: str | None = None,
+             tags: Iterable[str] = (), captioner: Captioner | None = None,
+             route_media: bool = True) -> ScanStats:
+    """扫描目录登记（含 zip 展开）。返回 ScanStats（出现 / 媒体分开计数）。
+
+    媒体分流（票 #20）：扩展名命中 media.IMAGE_EXTS / VIDEO_EXTS 的文件直接
+    `media.register_standalone_image` / `media.register_video`，不登记出现。
+    sha256 去重，所以重复扫、同一张图在多个日期目录里都只占一个 IMG/VID 编号。
+    route_media=False（CLI 的 --no-media）退回旧行为：媒体也当普通出现登记。
+    project / tags 只作用于本次登记的媒体（出现没有项目字段，triage 时才定）。
+    captioner 只作用于图片；没有 VLM 密钥时传 None，扫描不会联网。
+    zip 包内的媒体仍走出现登记（已知限制，见 ADR-0004）。
 
     日期范围（对应 014 的 --since）：
       - all_files=True：全量扫，不看目录结构（= 014 的 --since all）
@@ -112,6 +145,7 @@ def scan_dir(conn: sqlite3.Connection, src: Path, source_type: str = "wechat",
         非日期目录（如「备份」）和直接放在根下的文件一律跳过——这是 #19 修的坑，
         原来「备份」字典序大于日期，会被整个放行。
       - 两者都不给：扫所有文件。
+    日期筛选在分流之前生效：被筛掉的目录里的媒体同样不入库。
     """
     if not src.is_dir():
         raise FileNotFoundError(f"目录不存在: {src}")
@@ -119,7 +153,7 @@ def scan_dir(conn: sqlite3.Connection, src: Path, source_type: str = "wechat",
         raise ValueError(f"since 要标准日期（YYYY-MM-DD），收到: {since}")
     if since is not None and all_files:
         raise ValueError("all_files 与 since 不能同时给")
-    n = 0
+    occurrences = images = images_new = videos = videos_new = 0
     for p in sorted(src.rglob("*")):
         if not p.is_file() or p.name in SKIP_NAMES or p.name.startswith((".", "~$")):
             continue
@@ -131,16 +165,38 @@ def scan_dir(conn: sqlite3.Connection, src: Path, source_type: str = "wechat",
             date = _scan_date_dir(src, rel)
             if date is None or date < since:
                 continue
-        if p.suffix.lower() == ".zip":
-            n += _register_zip_entries(conn, p)
+        ext = p.suffix.lower()
+        if route_media and ext in media.MEDIA_EXTS:
+            if archive_dir is None:
+                raise ValueError(
+                    f"登记媒体 {p.name} 需要受管目录（archive_dir）；"
+                    f"或者用 route_media=False 退回普通出现登记"
+                )
+            if ext in media.IMAGE_EXTS:
+                r = media.register_standalone_image(
+                    conn, archive_dir, p, project=project, tags=tags,
+                    captioner=captioner,
+                )
+                images += 1
+                images_new += 1 if r.created else 0
+            else:
+                v = media.register_video(
+                    conn, archive_dir, p, project=project, tags=tags,
+                )
+                videos += 1
+                videos_new += 1 if v.created else 0
+            continue
+        if ext == ".zip":
+            occurrences += _register_zip_entries(conn, p)
         else:
             with p.open("rb") as f:
                 bh = fingerprint.sha256_stream(f)
-            fp = fingerprint.compute_text_fp(p, p.suffix.lower())
+            fp = fingerprint.compute_text_fp(p, ext)
             if register(conn, source_type, str(p), None, p.name, p.stat().st_size, bh, fp):
-                n += 1
+                occurrences += 1
     conn.commit()
-    return n
+    return ScanStats(occurrences=occurrences, images=images,
+                     images_new=images_new, videos=videos, videos_new=videos_new)
 
 
 def _register_zip_entries(conn: sqlite3.Connection, zp: Path) -> int:

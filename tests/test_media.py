@@ -27,6 +27,34 @@ class FakeCaptioner:
         return self.text
 
 
+# ---------- #20：媒体扩展名识别（scan 分流与 new-doc 拦截共用） ----------
+
+def test_is_media_recognizes_image_exts(tmp_path):
+    for ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"):
+        assert media.is_media(tmp_path / f"shot.{ext}") is True
+
+
+def test_is_media_recognizes_video_exts(tmp_path):
+    for ext in ("mp4", "mov", "avi", "mkv", "webm"):
+        assert media.is_media(tmp_path / f"clip.{ext}") is True
+
+
+def test_is_media_is_case_insensitive(tmp_path):
+    assert media.is_media(tmp_path / "SHOT.PNG") is True
+    assert media.is_media("clip.MOV") is True
+
+
+def test_is_media_rejects_documents_and_noext(tmp_path):
+    for name in ("方案.docx", "报告.pdf", "表格.xlsx", "README", "a.txt"):
+        assert media.is_media(tmp_path / name) is False
+
+
+def test_media_exts_are_lowercase_sets():
+    """扩展名集合统一小写带点，供 ingest/archive 直接 import。"""
+    assert ".png" in media.IMAGE_EXTS and ".mp4" in media.VIDEO_EXTS
+    assert all(e.startswith(".") and e == e.lower() for e in media.IMAGE_EXTS | media.VIDEO_EXTS)
+
+
 # ---------- 独立图 ----------
 
 def test_register_standalone_image_assigns_img_code(conn, archive_dir, tmp_path):
