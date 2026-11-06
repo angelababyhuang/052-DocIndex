@@ -46,6 +46,8 @@
 >
 > 一期（#13）先落地**本机 RapidOCR**：转换要能离线跑、不依赖 WeKnora 在线。qwen3.8-flash VLM 作为增强，等 #15/#16 接入 WeKnora 后再接（见 `docs/adr/0001`）。
 >
+> OCR 的补充拍板（2026-11-06，#23，用户选 A）：**OCR 一期就是本机 RapidOCR，维持现状**。这是「统一用 WeKnora 已配模型」的第二个例外（第一个是 caption），理由是扫描件必须在离线、且真相源的 md 不能由派生索引生成。
+>
 > caption 的补充拍板（2026-11-06，#14）：**caption 改由独立视觉模型生成（一期 `glm-4v-flash`）**，不再等 WeKnora。理由：WeKnora 的视觉模型只在它自己的索引管线里跑，没有「描述单张图」的对外接口；caption 是真相源字段，必须能脱开派生索引独立重建。模型走 OpenAI 兼容接口，`CAPTION_MODEL`/`CAPTION_BASE_URL` 可换（见 `docs/adr/0002`）。OCR 口径不变，仍是本机 RapidOCR 一期。
 
 现有三台机器（MBP M5 Pro 64G / Mac mini M6 16G / Windows i7 + RTX 3070 8G）在第一阶段不承担推理/存储职责。

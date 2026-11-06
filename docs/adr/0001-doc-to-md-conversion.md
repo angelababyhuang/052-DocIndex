@@ -38,7 +38,7 @@ docx 走 pandoc；文本型 PDF 走 markitdown；扫描/图文混排 PDF 走 PyM
 RapidOCR 离线识别；pptx 走 python-pptx；xlsx 走 markitdown。PDF 用 PyMuPDF 而不是
 pdfplumber 来判断有无文字层，因为渲染页面喂 OCR 也要它，一个库干两件事。
 
-**5. OCR 一期只用本机 RapidOCR，云端 VLM 押后。**
+**5. OCR 一期只用本机 RapidOCR，云端 VLM 押后。**（2026-11-06 经用户确认，选项 A：维持现状）
 spec §2.1 的目标态是 qwen3.8-flash VLM 主用、RapidOCR 兜底；但转换必须能离线跑，
 且 WeKnora 接入（#15/#16）还没落地，没有可用的 VLM 通路。所以一期就只接
 RapidOCR，判定为扫描版/无文字层的页逐页渲染后识别；VLM 作为增强在接入 WeKnora
