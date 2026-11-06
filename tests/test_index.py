@@ -26,11 +26,14 @@ def _archived_doc(conn, archive_dir, tmp_path, *, title="连杆方案", category
 class FakeClient:
     """记录调用顺序的假 WeKnora 客户端。"""
 
-    def __init__(self, existing_kb=None, metadata_error=None):
+    def __init__(self, existing_kb=None, metadata_error=None, wait_error=None,
+                 wait_status="completed"):
         self.calls = []
         self.kb_id = "kb-1"
         self.existing_kb = existing_kb
         self.metadata_error = metadata_error
+        self.wait_error = wait_error
+        self.wait_status = wait_status
 
     def find_kb(self, name):
         self.calls.append(("find_kb", name))
@@ -55,6 +58,13 @@ class FakeClient:
         self.calls.append(("set_knowledge_metadata", knowledge_id, dict(metadata)))
         if self.metadata_error:
             raise self.metadata_error
+
+    def wait_knowledge(self, kids):
+        kids = list(kids)
+        self.calls.append(("wait_knowledge", tuple(kids)))
+        if self.wait_error:
+            raise self.wait_error
+        return {kid: self.wait_status for kid in kids}
 
     def search(self, query, kb_ids, tag_ids=(), match_count=5):
         self.calls.append(("search", query, tuple(kb_ids), tuple(tag_ids), match_count))
@@ -225,8 +235,8 @@ def test_manifest_decode_reads_truncated_total():
 
 
 def test_index_units_writes_image_manifest_after_create(conn, archive_dir, tmp_path):
-    _archived_doc(conn, archive_dir, tmp_path,
-                  body="# 方案\n\n{{IMG-0001}} 与 {{IMG-0002}}\n")
+    doc_id, _, _ = _archived_doc(conn, archive_dir, tmp_path,
+                                 body="# 方案\n\n{{IMG-0001}} 与 {{IMG-0002}}\n")
     units = index.collect_units(conn, archive_dir)
     client = FakeClient()
     report = index.index_units(units, client, kb_name="052 文档库")
@@ -235,17 +245,20 @@ def test_index_units_writes_image_manifest_after_create(conn, archive_dir, tmp_p
     metas = [c for c in client.calls if c[0] == "set_knowledge_metadata"]
     assert len(metas) == 1
     assert metas[0][1] == "k-连杆方案"
-    assert metas[0][2] == {"图片": "IMG-0001,IMG-0002"}
-    # 写清单排在 create 之后（要拿到 knowledge_id）
-    assert client.calls.index(metas[0]) > client.calls.index(created[0])
+    assert metas[0][2] == {"文档": f"doc-{doc_id}", "图片": "IMG-0001,IMG-0002"}
+    # 写元数据排在 create 和解析完成之后（解析会回写 knowledge 行，先写会被覆盖）
+    waits = [c for c in client.calls if c[0] == "wait_knowledge"]
+    assert len(waits) == 1
+    assert client.calls.index(created[0]) < client.calls.index(waits[0]) < client.calls.index(metas[0])
     assert report.metadata_warnings == ()
 
 
-def test_index_units_skips_manifest_when_document_has_no_images(conn, archive_dir, tmp_path):
-    _archived_doc(conn, archive_dir, tmp_path)
+def test_index_units_writes_document_ref_even_without_images(conn, archive_dir, tmp_path):
+    doc_id, _, _ = _archived_doc(conn, archive_dir, tmp_path)
     client = FakeClient()
     index.index_units(index.collect_units(conn, archive_dir), client, kb_name="052 文档库")
-    assert [c for c in client.calls if c[0] == "set_knowledge_metadata"] == []
+    metas = [c for c in client.calls if c[0] == "set_knowledge_metadata"]
+    assert metas == [("set_knowledge_metadata", "k-连杆方案", {"文档": f"doc-{doc_id}"})]
 
 
 def test_index_units_degrades_when_manifest_write_fails(conn, archive_dir, tmp_path):
@@ -260,3 +273,33 @@ def test_index_units_degrades_when_manifest_write_fails(conn, archive_dir, tmp_p
     assert [c for c in client.calls if c[0] == "create_knowledge"]
 
 
+
+
+def test_index_units_skips_metadata_when_wait_fails(conn, archive_dir, tmp_path):
+    _archived_doc(conn, archive_dir, tmp_path)
+    client = FakeClient(wait_error=RuntimeError("poll boom"))
+    report = index.index_units(index.collect_units(conn, archive_dir), client,
+                               kb_name="052 文档库")
+    assert report.units == 1
+    assert any("等解析失败" in w for w in report.parse_warnings)
+    assert report.metadata_warnings == ()
+    assert [c for c in client.calls if c[0] == "set_knowledge_metadata"] == []
+
+
+def test_index_units_skips_metadata_when_parse_incomplete(conn, archive_dir, tmp_path):
+    _archived_doc(conn, archive_dir, tmp_path)
+    client = FakeClient(wait_status="processing")
+    report = index.index_units(index.collect_units(conn, archive_dir), client,
+                               kb_name="052 文档库")
+    assert any("解析未完成" in w for w in report.parse_warnings)
+    assert [c for c in client.calls if c[0] == "set_knowledge_metadata"] == []
+
+
+def test_index_units_writes_metadata_when_parse_failed(conn, archive_dir, tmp_path):
+    """解析失败不会再回写，元数据可以安全写；但要作为警告报出来。"""
+    _archived_doc(conn, archive_dir, tmp_path)
+    client = FakeClient(wait_status="failed")
+    report = index.index_units(index.collect_units(conn, archive_dir), client,
+                               kb_name="052 文档库")
+    assert any("解析失败" in w for w in report.parse_warnings)
+    assert [c for c in client.calls if c[0] == "set_knowledge_metadata"]

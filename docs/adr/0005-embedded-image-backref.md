@@ -39,9 +39,9 @@
 `index.collect_units` 产出的文档条目带 `Unit.images`（具体在 `_document_units`
 里从**实际要推送的 md** 抽 `{{IMG-####}}`，去重保序）；`index.index_units` 在创建
 知识拿到 `knowledge_id` 后，用 `PUT /api/v1/knowledge/:id` 写
-`custom_metadata.图片 = "IMG-0001,IMG-0002,…"`。没有内嵌图的文档不写（少一次
-请求、也少一份噪声元数据）。编码/解析格式只定义一处（`manifest.py`），写
-（index）和读（search）共用。
+`custom_metadata.图片 = "IMG-0001,IMG-0002,…"`。文档条目**总是**写 `文档`
+（见决策 6），有内嵌图时再写 `图片`；图片/视频条目不写。编码/解析格式只定义一处
+（`manifest.py`），写（index）和读（search）共用。
 
 清单从 md 里取而不是从 `document_images` 里取：清单描述的是**这条知识条目正文
 引用了哪些图**，md 的标记才是索引里真实存在的东西；`document_images` 仍是
@@ -72,8 +72,9 @@
   `resolve_image` 原样返回即可，不用改调用点。
 
 **4. 每一层失败都降级，不挡文本。**
-- 索引：清单 PUT 失败只记 `IndexReport.metadata_warnings`，CLI 打
-  `⚠ 图片清单写入失败：…`，知识条目照常入索引（图回指降级，文本检索不受影响）。
+- 索引：解析等待失败或仍有 `pending/processing` 时不写元数据（解析回写会覆盖），
+  记 `IndexReport.parse_warnings`；PUT 失败只记 `metadata_warnings`，CLI 打
+  `⚠ …`。两种情况知识条目都照常入索引（位置/图回指降级，文本检索不受影响）。
 - 检索：真相源没打开（文件不存在、只读打开失败）、编号未登记、母本文件丢了，
   都只打印编号 + 原因（「真相源不可用」「未登记」「母本缺失：<路径>」）；
   文本命中照常返回。搜索用只读连接打开真相源，**不会凭空建库**。
@@ -85,6 +86,16 @@
 `knowledge_custom_metadata` 里，CLI 在清单条数少于总数时打印
 `（图片清单只列了前 N 张，共 M 张）`，不把截断藏起来。
 
+**6. 同一份 `custom_metadata` 还带 `文档=doc-<id>`（#22 收窄后）。**
+元数据在 WeKnora 解析**完成后**写：解析回写 knowledge 行会覆盖解析中写入的
+`custom_metadata`（真机 3 条里丢 1 条）；`index` 因此先 `wait_knowledge` 再 PUT。
+检索命中文档条目时，`search` 用该字段回查真相源 `documents.current_version_id` →
+`versions.archive_path`（缺失时 `markdown_path`），打印受管文件绝对路径。等待
+解析失败/超时（未 `completed`）的知识跳过元数据，只警告。没有按
+`knowledge_title` 匹配：标题可重复、也会随改名漂移，`doc-<id>` 才是真相源里的稳定
+标识。代价是旧索引要 `index --rebuild` 一次才有该字段；没有字段时只提示重建，
+不挡文本命中。
+
 ## 后果
 
 - 检索命中含图正文时，`search` 输出会多一行
@@ -94,8 +105,9 @@
   方便先确认清单会带哪些图。
 - 「并打开」这一步交给调用方：CLI 打印母本绝对路径（spec §7.1 的承诺），不在
   工具里拉起图片查看器；飞书/Web 入口要看图得等图片进 COS（见下一条）。
-- 索引每条**有内嵌图的文档**多一次 PUT；没有图就零额外请求。重建索引（`--rebuild`）
-  会连同清单一起重建，不需要单独的台账。
+- 索引每条**文档**都多一次 `custom_metadata` PUT（即使没有内嵌图，也要带 `文档`）；
+  图片/视频条目只在有清单时写。重建索引（`--rebuild`）会连同元数据一起重建，不需要
+  单独的台账。旧索引没有 `文档` 字段，`search` 会提示重建。
 - WeKnora 的飞书渠道 / Web 前端**看不到图**：图片二进制不在 WeKnora 里。第一阶段
   的「看到图」是通过命令行打印本地母本路径实现的；要在 WeKnora 界面里渲染，
   得等图片进 COS 并用公开直链（第二阶段）。

@@ -26,6 +26,7 @@ from docarchive import imagelib, manifest
 # 图片条目的标题格式由 index._media_units 生成；这里只认它，避免把文档标题里的
 # 编号误当图片。
 _IMAGE_UNIT_TITLE_RE = re.compile(r"^图片 (IMG-\d{4,})$")
+_VIDEO_UNIT_TITLE_RE = re.compile(r"^视频 (VID-\d{4,})$")
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,14 @@ class HitImages:
         return tuple(code for code in self.knowledge if code not in self.chunk)
 
 
+def document_ref(hit: Mapping) -> str | None:
+    """命中条目对应的真相源文档（`custom_metadata.文档 = doc-<id>`）。
+
+    旧索引没有该字段，返回 None；调用方据此只提示、不报错（#22）。
+    """
+    return manifest.document_ref(hit.get("knowledge_custom_metadata"))
+
+
 def hit_image_codes(hit: Mapping) -> HitImages:
     """从一条 WeKnora 检索结果里取图片编号；字段缺失/形状不对都退化成空。"""
     content = hit.get("content")
@@ -58,6 +67,18 @@ def hit_image_codes(hit: Mapping) -> HitImages:
         knowledge_total=decoded.total,
         unit_image=_unit_image(hit.get("knowledge_title")),
     )
+
+
+def is_unit_hit(hit: Mapping) -> bool:
+    """命中是不是图片/视频条目本身（标题是 `图片 IMG-…` / `视频 VID-…`）。
+
+    严格匹配 index 生成的标题格式；普通文档（哪怕标题以“图片”开头）不算。
+    """
+    title = hit.get("knowledge_title")
+    if not isinstance(title, str):
+        return False
+    title = title.strip()
+    return bool(_IMAGE_UNIT_TITLE_RE.match(title) or _VIDEO_UNIT_TITLE_RE.match(title))
 
 
 def _unit_image(title: object) -> tuple[str, ...]:

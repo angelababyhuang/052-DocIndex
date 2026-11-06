@@ -1,7 +1,7 @@
 # WeKnora API 契约与实测坑（052 用到的部分）
 
 改 `src/docarchive/weknora.py` / `index.py` 之前先读这份，别重新去翻网页文档。
-内容来自 2026-11-06 的真机实测（WeKnora v0.9.0，部署在腾讯云 Lighthouse）。
+内容来自 2026-11-06 的真机实测：**线上实际是 WeKnora v0.8.0**（`GET /api/v1/system/info`，commit `1edcd54`）；下面的契约按 v0.9.0 源码记录，版本差异见「需要知道的限制」。
 
 ## 连接与认证
 
@@ -40,13 +40,13 @@
 | 查解析状态 | `GET /api/v1/knowledge/:id` | `data.parse_status` ∈ `pending/processing/completed/failed`；**不要**用 `/knowledge-bases/:kb/knowledge/:kid`（404） |
 | 检索 | `POST /api/v1/knowledge-search` | body `{query, knowledge_base_ids, tag_ids, match_count}`；返回项含 `content`、`score`、`knowledge_id`、`knowledge_title` |
 
-## knowledge 的 custom_metadata（#21 实测）
+## knowledge 的 custom_metadata（#21/#22 实测）
 
 `manual` 接口没有 metadata 字段，只能建完知识后单独写：
 
 ```
 PUT /api/v1/knowledge/:kid
-{"custom_metadata": {"图片": "IMG-0001,IMG-0002"}}
+{"custom_metadata": {"图片": "IMG-0001,IMG-0002", "文档": "doc-12"}}
 ```
 
 - 校验：≤20 个字段、键 1–64 字符、值 ≤1000 字符（string/number/bool/null）。
@@ -55,8 +55,13 @@ PUT /api/v1/knowledge/:kid
 - `GET /api/v1/knowledge/:kid` 读回来是对象（`data.custom_metadata`）。
 - **检索结果里是拍平文本**：`knowledge_custom_metadata` 为 `键: 值`、多字段按
   换行分隔、键按字典序（`CustomMetadataText()` 的输出），空元数据是 `null`。
-  解析按行取 `图片:` 前缀，不要假设 JSON。
+  解析按行取 `图片:` / `文档:` 前缀，不要假设 JSON。
+- 052 的约定：**文档条目**带 `文档 = doc-<id>`（回查受管文件位置），有内嵌图时
+  再带 `图片` / `图片数`（#21）；图片/视频条目不写。旧索引没有 `文档` 字段，需要
+  `index --rebuild` 一次。
 - 元数据变化会触发一次文档摘要刷新（`summary_status` 转 `pending`），不阻塞解析。
+- **必须在解析完成后写**：解析完成会回写 knowledge 行，解析过程中写的 `custom_metadata`
+  可能被覆盖（真机 3 条里丢 1 条）。052 的 `index` 先 `wait_knowledge` 再 PUT。
 
 ## 内嵌图标记在分块里原样保留（#21 实测）
 
@@ -76,6 +81,7 @@ manual 推的 markdown 里写 `{{IMG-0001}}`，分块正文和 `knowledge-search
 - **图片二进制不进 WeKnora**：图片母本只在真相源，检索回指由本仓库按编号解析
   `images.path`（ADR-0005）。WeKnora 返回的 `resource://` / 直链只适用于它自己
   收的文件，与本项目的图无关。
+- **线上 v0.8.0 的 `knowledge-search` 不认逐请求参数**：`vector_threshold`、`keyword_threshold`、`match_count`、`disable_keywords_match`、`disable_vector_match`、`rerank` 都会被静默忽略；v0.8.2 仍如此，**v0.8.3 才加上**。本仓库改用客户端截断 `--limit`；要真正调阈值/开关，需升级到 v0.8.3+，或走 `hybrid-search`（v0.8.0 已支持阈值/开关/`match_count`，但没有 rerank）。
 - **embedding 模型按名字钉死**（spec §7.2）：默认找 `text-embedding-v4`，找不到就报错，不静默换「空间里第一个」。
 - 标签按知识库隔离；既有库可能有别的命名习惯（如 `005-雷达仿真`），所以默认建独立库 `052 文档库`。
 

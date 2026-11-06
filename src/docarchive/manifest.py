@@ -1,12 +1,14 @@
-"""知识条目图片清单（image manifest）的编码与解析。
+"""知识条目 custom_metadata 的编码与解析。
 
-索引时把文档正文里的 `{{IMG-####}}` 抽成清单，写进 WeKnora knowledge 的
-`custom_metadata.图片`；检索时从 `knowledge_custom_metadata` 读回（ADR-0005）。
-写（index）和读（search）共用这个模块，格式只定义一次。
+两类字段共用一份 WeKnora `custom_metadata`：
+- `图片` / `图片数`：文档正文里的内嵌图清单（#21，ADR-0005）；
+- `文档`：知识条目对应的真相源文档（`doc-<id>`），让检索结果能回到受管文件（#22）。
 
-WeKnora 侧的两个约束（实测，见 docs/weknora-api.md）：
-- `custom_metadata` 的值 ≤1000 字符，超了整条 PUT 会 500 → 清单要截断并记总数；
-- 检索结果里的该字段是拍平的 `键: 值` 文本（多字段换行），不是 JSON 对象。
+写（index）和读（search）共用这个模块，格式只定义一次。WeKnora 的约束：
+`custom_metadata` 的值 ≤1000 字符，超了整条 PUT 会 500；检索结果里的字段是
+拍平的 `键: 值` 文本（多字段换行），不是 JSON 对象。
+
+图片清单的值超长时截断并记 `图片数`（见 docs/weknora-api.md 的实测约束）。
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from docarchive import imagelib
 
 IMAGE_MANIFEST_KEY = "图片"
 IMAGE_COUNT_KEY = "图片数"
+DOCUMENT_KEY = "文档"
 MAX_MANIFEST_CHARS = 1000
 
 
@@ -51,28 +54,41 @@ def encode(codes: Iterable[str]) -> dict[str, object]:
     return fields
 
 
-def decode(value: object) -> Manifest:
-    """解析 `knowledge_custom_metadata`（拍平文本或 JSON 对象两种形状都兜住）。"""
+def parse_fields(value: object) -> dict[str, str]:
+    """把 `knowledge_custom_metadata` 解析成 `{键: 值}`（拍平文本或 JSON 对象）。"""
     if isinstance(value, Mapping):
-        raw = value.get(IMAGE_MANIFEST_KEY)
-        count = value.get(IMAGE_COUNT_KEY)
-        codes = imagelib.all_codes(raw) if isinstance(raw, str) else ()
-        total = count if isinstance(count, int) and not isinstance(count, bool) else None
-        return Manifest(codes, total)
+        out: dict[str, str] = {}
+        for key, val in value.items():
+            if not isinstance(key, str) or isinstance(val, bool):
+                continue
+            if isinstance(val, (str, int, float)):
+                out[key.strip()] = str(val).strip()
+        return out
     if not isinstance(value, str):
-        return Manifest()
-    codes: tuple[str, ...] = ()
-    total: int | None = None
+        return {}
+    out = {}
     for line in value.splitlines():
         key, sep, rest = line.partition(":")
-        if not sep:
-            continue
-        key = key.strip()
-        if key == IMAGE_MANIFEST_KEY:
-            codes = imagelib.all_codes(rest)
-        elif key == IMAGE_COUNT_KEY:
-            try:
-                total = int(rest.strip())
-            except ValueError:
-                total = None
+        if sep:
+            out[key.strip()] = rest.strip()
+    return out
+
+
+def document_ref(value: object) -> str | None:
+    """取 `文档` 字段（`doc-<id>`）；旧索引/其他元数据返回 None。"""
+    ref = parse_fields(value).get(DOCUMENT_KEY, "")
+    return ref or None
+
+
+def decode(value: object) -> Manifest:
+    """解析 `knowledge_custom_metadata` 里的图片清单（兼容文本与 JSON 对象）。"""
+    fields = parse_fields(value)
+    codes = imagelib.all_codes(fields.get(IMAGE_MANIFEST_KEY, ""))
+    raw_total = fields.get(IMAGE_COUNT_KEY)
+    total: int | None = None
+    if raw_total is not None:
+        try:
+            total = int(raw_total)
+        except ValueError:
+            total = None
     return Manifest(codes, total)

@@ -5,14 +5,80 @@
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from docarchive import db, media
 
 STATUS_CN = {"pending": "待处理", "archived": "已归", "merged": "已并", "ignored": "已忽略"}
 CATEGORIES = ["研发", "测试", "管理", "商务", "资料"]
+
+DOC_REF_PREFIX = "doc"
+_DOC_REF_RE = re.compile(rf"^{DOC_REF_PREFIX}-(\d+)$")
+
+
+def document_ref(doc_id: int) -> str:
+    """文档在知识元数据里的标识：`doc-<id>`（#22）。"""
+    return f"{DOC_REF_PREFIX}-{doc_id}"
+
+
+def parse_document_ref(ref: str) -> int | None:
+    """`doc-<id>` → 文档 id；格式不对返回 None。"""
+    match = _DOC_REF_RE.fullmatch((ref or "").strip())
+    return int(match.group(1)) if match else None
+
+
+@dataclass(frozen=True)
+class DocumentLocation:
+    """检索命中的文档在受管目录里的位置；解析不到时 path 为空、problem 说明原因。"""
+
+    doc_id: int | None = None
+    title: str | None = None
+    path: str | None = None
+    problem: str | None = None
+
+
+def resolve_document(conn: sqlite3.Connection | None, archive_dir: str | Path,
+                     doc_ref: str) -> DocumentLocation:
+    """从检索元数据里的 `doc-<id>` 回查真相源，解析受管文件的绝对路径。
+
+    `archive_path`（原件）优先，没有就退到 `markdown_path`（派生 md）。
+    检索回指用（#22）：任何一步取不到只回执原因，不抛异常。
+    """
+    if conn is None:
+        return DocumentLocation(problem="真相源不可用")
+    doc_id = parse_document_ref(doc_ref)
+    if doc_id is None:
+        return DocumentLocation(problem=f"无效的文档标识：{doc_ref}")
+    try:
+        row = conn.execute(
+            "SELECT d.id, d.title, v.archive_path, v.markdown_path "
+            "FROM documents d LEFT JOIN versions v ON v.id = d.current_version_id "
+            "WHERE d.id = ?",
+            (doc_id,),
+        ).fetchone()
+    except sqlite3.Error as e:  # 库损坏/旧 schema：只降级，不影响文本命中
+        return DocumentLocation(problem=f"真相源不可用：{e}")
+    if row is None:
+        return DocumentLocation(doc_id, problem=f"文档 #{doc_id} 不存在")
+    rels = [rel for rel in ((row[2] or "").strip(), (row[3] or "").strip()) if rel]
+    if not rels:
+        return DocumentLocation(doc_id, row[1], problem="无受管文件")
+    missing: Path | None = None
+    for rel in rels:  # archive_path 优先，原件丢了再退到 markdown_path
+        if "://" in rel:  # COS / 对象存储
+            return DocumentLocation(doc_id, row[1], path=rel)
+        path = Path(rel)
+        if not path.is_absolute():
+            path = Path(archive_dir) / rel
+        path = path.resolve()
+        if path.is_file():
+            return DocumentLocation(doc_id, row[1], path=str(path))
+        missing = missing or path
+    return DocumentLocation(doc_id, row[1], problem=f"文件缺失：{missing}")
 
 
 def copy_to_archive(occ: sqlite3.Row, archive_dir: Path, doc_id: int,
@@ -27,7 +93,7 @@ def copy_to_archive(occ: sqlite3.Row, archive_dir: Path, doc_id: int,
     src_type, src_path, entry = occ["source_type"], occ["source_path"], occ["source_entry"]
     if src_type == "feishu":
         return None
-    dest_dir = archive_dir / f"doc-{doc_id}"
+    dest_dir = archive_dir / document_ref(doc_id)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"v{version_id}-{occ['file_name']}"
     if src_type == "zip":

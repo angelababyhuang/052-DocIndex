@@ -172,3 +172,92 @@ def test_new_doc_still_accepts_documents(conn, archive_dir, tmp_path):
     occ = _make_occ(conn, source_path=str(src), file_name="a.docx")
     doc_id, vid = archive.new_doc(conn, occ["id"], "P", archive_dir)
     assert doc_id and vid
+
+
+# ---------- #22：检索结果回查受管文件位置 ----------
+
+def test_resolve_document_returns_archive_path(conn, archive_dir, tmp_path):
+    src = tmp_path / "a.txt"
+    src.write_text("hello")
+    occ = _make_occ(conn, source_path=str(src), file_name="a.txt")
+    doc_id, vid = archive.new_doc(conn, occ["id"], "P", archive_dir, title="A")
+
+    loc = archive.resolve_document(conn, archive_dir, f"doc-{doc_id}")
+    assert loc.doc_id == doc_id
+    assert loc.title == "A"
+    assert loc.path == str((archive_dir / f"doc-{doc_id}" / f"v{vid}-a.txt").resolve())
+    assert loc.problem is None
+
+
+def test_resolve_document_falls_back_to_markdown_path(conn, archive_dir, tmp_path):
+    src = tmp_path / "a.txt"
+    src.write_text("hello")
+    occ = _make_occ(conn, source_path=str(src), file_name="a.txt")
+    doc_id, vid = archive.new_doc(conn, occ["id"], "P", archive_dir, title="A")
+    md_rel = f"doc-{doc_id}/v{vid}-a.md"
+    (archive_dir / md_rel).write_text("# A", encoding="utf-8")
+    conn.execute("UPDATE versions SET archive_path=NULL, markdown_path=? WHERE id=?",
+                 (md_rel, vid))
+    conn.commit()
+
+    loc = archive.resolve_document(conn, archive_dir, f"doc-{doc_id}")
+    assert loc.path == str((archive_dir / md_rel).resolve())
+
+
+def test_resolve_document_reports_missing_file(conn, archive_dir, tmp_path):
+    src = tmp_path / "a.txt"
+    src.write_text("hello")
+    occ = _make_occ(conn, source_path=str(src), file_name="a.txt")
+    doc_id, vid = archive.new_doc(conn, occ["id"], "P", archive_dir, title="A")
+    (archive_dir / f"doc-{doc_id}" / f"v{vid}-a.txt").unlink()
+
+    loc = archive.resolve_document(conn, archive_dir, f"doc-{doc_id}")
+    assert loc.path is None
+    assert "文件缺失" in loc.problem
+
+
+def test_resolve_document_unknown_or_invalid_ref(conn, archive_dir):
+    assert "不存在" in archive.resolve_document(conn, archive_dir, "doc-999").problem
+    assert "无效" in archive.resolve_document(conn, archive_dir, "nope").problem
+
+
+def test_resolve_document_without_truth_source(archive_dir):
+    loc = archive.resolve_document(None, archive_dir, "doc-1")
+    assert loc.path is None
+    assert "真相源不可用" in loc.problem
+
+
+def test_resolve_document_falls_back_when_archive_file_missing(conn, archive_dir, tmp_path):
+    src = tmp_path / "a.txt"
+    src.write_text("hello")
+    occ = _make_occ(conn, source_path=str(src), file_name="a.txt")
+    doc_id, vid = archive.new_doc(conn, occ["id"], "P", archive_dir, title="A")
+    md_rel = f"doc-{doc_id}/v{vid}-a.md"
+    (archive_dir / md_rel).write_text("# A", encoding="utf-8")
+    conn.execute("UPDATE versions SET markdown_path=? WHERE id=?", (md_rel, vid))
+    conn.commit()
+    (archive_dir / f"doc-{doc_id}" / f"v{vid}-a.txt").unlink()  # 原件丢了，md 还在
+
+    loc = archive.resolve_document(conn, archive_dir, f"doc-{doc_id}")
+    assert loc.path == str((archive_dir / md_rel).resolve())
+
+
+def test_document_ref_roundtrip_and_invalid():
+    assert archive.document_ref(12) == "doc-12"
+    assert archive.parse_document_ref("doc-12") == 12
+    assert archive.parse_document_ref("doc-12\n") == 12
+    assert archive.parse_document_ref("12") is None
+    assert archive.parse_document_ref("doc-x") is None
+
+
+def test_resolve_document_passes_remote_path_through(conn, archive_dir, tmp_path):
+    src = tmp_path / "a.txt"
+    src.write_text("hello")
+    occ = _make_occ(conn, source_path=str(src), file_name="a.txt")
+    doc_id, vid = archive.new_doc(conn, occ["id"], "P", archive_dir, title="A")
+    conn.execute("UPDATE versions SET archive_path=? WHERE id=?",
+                 ("https://cos.example.com/a.docx", vid))
+    conn.commit()
+
+    loc = archive.resolve_document(conn, archive_dir, f"doc-{doc_id}")
+    assert loc.path == "https://cos.example.com/a.docx"
