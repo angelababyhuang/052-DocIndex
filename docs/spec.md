@@ -192,7 +192,9 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 退化成编号文本）、一个视频（简介，无简介时退化成编号文本）各一条；分块交给 WeKnora。标签扁平、四维编码在名字里
 （`项目/<名>`、`类别/<名>`、`图片`、`视频`）。同名知识库已存在时默认报错，
 `--rebuild` 才删库重建——索引是派生物，正确状态永远是「按真相源重建一遍」。
-命令行检索：`python -m docarchive search <关键词> [--kb-name 名称] [--tag 项目/xxx] [--limit N]`。见 `docs/adr/0003`。
+命令行检索：`python -m docarchive search <关键词> [--kb-name 名称] [--tag 项目/xxx] [--limit N] [--db 真相源路径]`。见 `docs/adr/0003`。
+
+检索命中一段含 `{{IMG-####}}` 的正文时，命令行按编号从真相源解析图片母本并打印绝对路径；知识条目还带一份图片清单（`custom_metadata.图片`）兜底文档级图片，命中图片条目（caption）时按标题编号同样解析母本。清单超长会截断并提示总数。图缺失/未登记/真相源不可用时只标注原因，文本命中照常返回。见 `docs/adr/0005`。
 
 
 - **纯文本检索**：WeKnora dense（`text-embedding-v4`，2048 维）+ BM25（ParadeDB 自带 jieba）。

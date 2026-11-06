@@ -148,6 +148,18 @@ class WeKnoraClient:
             raise WeKnoraError(f"建知识没拿到 id: {str(data)[:200]}")
         return kid
 
+    def set_knowledge_metadata(self, knowledge_id: str,
+                               metadata: Mapping[str, object]) -> None:
+        """写 knowledge 的 custom_metadata（整体覆盖）。
+
+        manual 接口没有 metadata 字段，只能建完再 PUT（#21）。WeKnora 校验：
+        最多 20 个字段、键 1–64 字符、值 ≤1000 字符，超了整条写入失败。
+        检索结果里这份元数据以 `knowledge_custom_metadata` 文本返回
+        （`键: 值`，多字段换行；见 docs/weknora-api.md）。
+        """
+        self._request("PUT", f"/api/v1/knowledge/{knowledge_id}",
+                      {"custom_metadata": dict(metadata)})
+
     def knowledge_status(self, kid: str) -> str:
         """解析状态：pending / processing / completed / failed。"""
         data = self._request("GET", f"/api/v1/knowledge/{kid}")

@@ -127,6 +127,18 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def connect_readonly(db_path: str | Path) -> sqlite3.Connection:
+    """只读打开既有真相源（搜索回指图片用）。
+
+    不应用 schema、不建库：读命令不该顺手造出一个空真相源。文件不存在时
+    sqlite3 会抛 OperationalError，由调用方决定怎么降级。
+    """
+    uri = Path(db_path).expanduser().resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def _migrate_columns(conn: sqlite3.Connection) -> None:
     """幂等列迁移：给既有库补上后加的列（images.path/project_id、videos 两列、versions.markdown_path）。"""
     def _cols(table: str) -> set[str]:

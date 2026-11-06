@@ -1,4 +1,8 @@
 """票 #10：数据模型与真相源骨架。"""
+import sqlite3
+
+import pytest
+
 from docarchive import db
 
 
@@ -123,3 +127,23 @@ def test_versions_have_markdown_path(conn):
     conn.execute("INSERT INTO versions(document_id, markdown_path) VALUES (1, 'doc-1/v1-a.md')")
     row = conn.execute("SELECT markdown_path FROM versions WHERE id=1").fetchone()
     assert row["markdown_path"] == "doc-1/v1-a.md"
+
+
+def test_connect_readonly_does_not_create_and_reads(tmp_path):
+    missing = tmp_path / "missing.db"
+    with pytest.raises(sqlite3.OperationalError):
+        db.connect_readonly(missing)
+    assert not missing.exists()
+
+    conn = db.connect(tmp_path / "real.db")
+    conn.execute("INSERT INTO projects(name) VALUES ('浮标项目')")
+    conn.commit()
+    conn.close()
+
+    ro = db.connect_readonly(tmp_path / "real.db")
+    try:
+        assert ro.execute("SELECT name FROM projects").fetchone()["name"] == "浮标项目"
+        with pytest.raises(sqlite3.OperationalError):
+            ro.execute("INSERT INTO projects(name) VALUES ('x')")
+    finally:
+        ro.close()
