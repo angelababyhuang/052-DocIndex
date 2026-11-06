@@ -35,10 +35,14 @@
 |---|---|
 | 向量库 / 检索 / 问答 | 腾讯云 Lighthouse 官方 WeKnora 镜像（4核8GB，245 元/月） |
 | 图片/视频文件存储 | 腾讯云 COS |
-| 图片概述（caption） | 智谱 `GLM-4V-Flash`（免费） |
-| OCR（扫描件） | SiliconFlow `PaddleOCR-VL-1.5`（免费）+ 本机 RapidOCR 离线兜底 |
-| 文本 embedding | SiliconFlow `BAAI/bge-m3`（免费，1024 维） |
+| 图片概述（caption） | WeKnora 已配 `qwen3.8-flash`（阿里云百炼 VLM，supports_vision） |
+| OCR（扫描件） | WeKnora 已配 `qwen3.8-flash`（VLM）+ 本机 RapidOCR 离线兜底 |
+| 文本 embedding | WeKnora 已配 `text-embedding-v4`（阿里云百炼，2048 维） |
+| 问答 | WeKnora 已配 `deepseek-flash` |
+| 重排 | WeKnora 已配 `qwen3.7-text-rerank` |
 | 现有三台机器 | 只做开发与客户端，不承担推理/存储职责 |
+
+> 说明（2026-11-06 用户拍板）：WeKnora 实例里已配好阿里云百炼四件套（embedding/问答/重排/视觉），全部沿用现有配置，不改。spec 早期写的 bge-m3 / GLM-4V-Flash / PaddleOCR-VL 作废，统一用 WeKnora 已配模型。
 
 现有三台机器（MBP M5 Pro 64G / Mac mini M6 16G / Windows i7 + RTX 3070 8G）在第一阶段不承担推理/存储职责。
 
@@ -62,7 +66,7 @@
 
 WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
         ▲
-        │ 派生：SQLite 里的正文 + caption 文本 → 分块 → bge-m3 向量
+        │ 派生：SQLite 里的正文 + caption 文本 → 分块 → text-embedding-v4 向量
         │
 查询入口：飞书机器人（WeKnora 原生渠道）+ 局域网 Web UI
 ```
@@ -92,7 +96,7 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 
 | 实体 | 含义 | 关键字段 |
 |---|---|---|
-| **图片 Image** | 去重后的独立图片实体 | `IMG-####`（内容 sha256 去重、永不改号）、名称、sha256、字节、扩展名、原始名、来源、caption（GLM-4V-Flash 生成）、尺寸 |
+| **图片 Image** | 去重后的独立图片实体 | `IMG-####`（内容 sha256 去重、永不改号）、名称、sha256、字节、扩展名、原始名、来源、caption（qwen3.8-flash 生成）、尺寸 |
 | **视频 Video** | 视频实体 | `VID-####`、名称、sha256、字节、扩展名、简介（**人填**）、时长、来源 |
 
 图片库字段继承 031 的 ADR-0001/0002：`IMG-0001` 起四位数字按内容 sha256 去重后顺序分配，ID 与内容绑定、永不改号、永不复用，单一母本 + 登记表 `索引.tsv`，引用只认 `{{IMG-0001}}`。
@@ -138,7 +142,7 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 |---|---|---|
 | docx | pandoc 3.5 | 表格/图片/OMML 公式/脚注/多级标题；页眉页脚丢失（可接受） |
 | 文本型 PDF | markitdown / pdfplumber | 表格结构可能丢失，需人工校形 |
-| 扫描版 PDF | OCR（PaddleOCR-VL-1.5 免费，RapidOCR 兜底） | 无 OCR 则无文本进索引 |
+| 扫描版 PDF | OCR（qwen3.8-flash VLM，RapidOCR 兜底） | 无 OCR 则无文本进索引 |
 | pptx | python-pptx（读文本/表格/图片/图表） | pandoc 无 pptx reader |
 | xlsx | markitdown | 公式不求值 |
 
@@ -168,13 +172,13 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 
 ### 7.1 检索架构（第一阶段）
 
-- **纯文本检索**：WeKnora dense（`bge-m3`，1024 维）+ BM25（ParadeDB 自带 jieba）。
+- **纯文本检索**：WeKnora dense（`text-embedding-v4`，2048 维）+ BM25（ParadeDB 自带 jieba）。
 - **图片后置 caption**：图片不进向量库，caption（文本）走普通检索。
 - **视频**：人写简介，简介文本走普通检索。
 
 ### 7.2 embedding 选型
 
-**SiliconFlow `BAAI/bge-m3`（免费，1024 维）**。理由：免费、WeKnora 默认就是 bge-m3、1024 维零迁移成本、中文语义检索实测有效（余弦 0.82 命中）。换 embedding 模型需重建索引，所以 1024 维从第一天定死。
+**WeKnora 已配 `text-embedding-v4`（阿里云百炼，2048 维）**。用户拍板沿用现有配置，不改。换 embedding 模型需重建索引，所以维度和模型从第一天定死。
 
 ### 7.3 检索能力
 
@@ -238,10 +242,9 @@ WeKnora 自带前端，绑到内网 IP。
 | 开发语言 | Python 3.10（摄入/转换/图片库，与 014/031 一致） |
 | 真相源 | SQLite |
 | 转换 | pandoc 3.5 + markitdown + python-pptx + RapidOCR（本机已装） |
-| 向量/检索 | 云端 WeKnora（Lighthouse 镜像）+ bge-m3 |
+| 向量/检索 | 云端 WeKnora（Lighthouse 镜像）+ text-embedding-v4 |
 | 对象存储 | 腾讯云 COS |
-| VLM | 智谱 GLM-4V-Flash（免费，图片概述） |
-| OCR | SiliconFlow PaddleOCR-VL-1.5（免费）+ RapidOCR 兜底 |
+| VLM（图片概述 + OCR） | WeKnora 已配 qwen3.8-flash（阿里云百炼）+ 本机 RapidOCR 兜底 |
 | 查询 | WeKnora 原生飞书渠道 + 自带 Web UI |
 
 ## 12. 待 spec 定稿的字段级细节
