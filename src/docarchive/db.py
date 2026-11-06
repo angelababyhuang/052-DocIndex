@@ -1,0 +1,127 @@
+"""团队文档归档系统 — 真相源 schema 与数据访问层。
+
+词汇见 GLOSSARY.md。设计决策见 docs/spec.md 与 014 的 docs/adr/。
+"""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS projects(
+  id INTEGER PRIMARY KEY,
+  name TEXT UNIQUE NOT NULL,
+  created_at TEXT DEFAULT (datetime('now','localtime')));
+
+CREATE TABLE IF NOT EXISTS documents(
+  id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL,
+  project_id INTEGER REFERENCES projects(id),
+  current_version_id INTEGER,
+  category TEXT,
+  created_at TEXT DEFAULT (datetime('now','localtime')));
+
+CREATE TABLE IF NOT EXISTS versions(
+  id INTEGER PRIMARY KEY,
+  document_id INTEGER NOT NULL REFERENCES documents(id),
+  byte_hash TEXT,
+  text_fp TEXT,
+  archive_path TEXT,
+  note TEXT,
+  created_at TEXT DEFAULT (datetime('now','localtime')));
+
+CREATE TABLE IF NOT EXISTS occurrences(
+  id INTEGER PRIMARY KEY,
+  source_type TEXT NOT NULL,          -- wechat | zip | feishu | manual
+  source_path TEXT NOT NULL,
+  source_entry TEXT,
+  file_name TEXT NOT NULL,
+  ext TEXT,
+  size INTEGER,
+  byte_hash TEXT,
+  text_fp TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending|archived|merged|ignored
+  document_id INTEGER REFERENCES documents(id),
+  version_id INTEGER REFERENCES versions(id),
+  note TEXT,
+  registered_at TEXT DEFAULT (datetime('now','localtime')),
+  triaged_at TEXT);
+CREATE INDEX IF NOT EXISTS ix_occ_status ON occurrences(status);
+CREATE INDEX IF NOT EXISTS ix_occ_bh ON occurrences(byte_hash);
+CREATE INDEX IF NOT EXISTS ix_occ_fp ON occurrences(text_fp);
+
+-- 图片：独立顶层实体，IMG-#### 按内容 sha256 去重后顺序分配、永不改号
+CREATE TABLE IF NOT EXISTS images(
+  id INTEGER PRIMARY KEY,
+  code TEXT UNIQUE NOT NULL,          -- IMG-0001
+  name TEXT,                          -- 显示名，可空可改
+  sha256 TEXT UNIQUE NOT NULL,        -- 内容哈希，去重键
+  byte_size INTEGER,
+  ext TEXT,
+  original_name TEXT,
+  source TEXT,                        -- 溯源：从哪个文件抽出/哪个微信文件
+  caption TEXT,                       -- 图片描述（VLM 生成）
+  width INTEGER,
+  height INTEGER,
+  created_at TEXT DEFAULT (datetime('now','localtime')));
+
+-- 视频：独立顶层实体，VID-####，第一阶段人填简介
+CREATE TABLE IF NOT EXISTS videos(
+  id INTEGER PRIMARY KEY,
+  code TEXT UNIQUE NOT NULL,          -- VID-0001
+  name TEXT,
+  sha256 TEXT UNIQUE NOT NULL,
+  byte_size INTEGER,
+  ext TEXT,
+  original_name TEXT,
+  source TEXT,
+  intro TEXT,                         -- 人填简介
+  duration_seconds REAL,
+  created_at TEXT DEFAULT (datetime('now','localtime')));
+
+-- 文档↔图片 关联：区分内嵌/独立，内嵌记位置
+CREATE TABLE IF NOT EXISTS document_images(
+  document_id INTEGER NOT NULL REFERENCES documents(id),
+  image_id INTEGER NOT NULL REFERENCES images(id),
+  kind TEXT NOT NULL DEFAULT 'embedded',  -- embedded | standalone
+  position TEXT,                      -- 内嵌图在文档中的位置（可空）
+  PRIMARY KEY (document_id, image_id));
+
+-- 关联项目标签：文档单归属(project_id)之外的关联项目
+CREATE TABLE IF NOT EXISTS document_project_tags(
+  document_id INTEGER NOT NULL REFERENCES documents(id),
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  PRIMARY KEY (document_id, project_id));
+
+-- 号段计数器：保证 IMG/VID 编号单调递增、删除不回收
+CREATE TABLE IF NOT EXISTS code_counters(
+  prefix TEXT PRIMARY KEY,            -- 'IMG' | 'VID'
+  last_num INTEGER NOT NULL DEFAULT 0);
+"""
+
+
+def connect(db_path: str | Path) -> sqlite3.Connection:
+    """打开（或创建）真相源数据库，应用 schema。"""
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA)
+    return conn
+
+
+def next_code(conn: sqlite3.Connection, prefix: str, width: int = 4) -> str:
+    """分配下一个 entity code（如 IMG-0001 / VID-0002）。
+
+    单调递增，永不改号、永不复用（删除后不回收）。号段计数器独立于实体表，
+    因此删除实体不会让号段回退。
+    """
+    # UPSERT：已有则 +1，首次插入从 0 起步后再 +1，得到 1
+    conn.execute(
+        "INSERT INTO code_counters(prefix, last_num) VALUES (?, 1) "
+        "ON CONFLICT(prefix) DO UPDATE SET last_num = last_num + 1",
+        (prefix,),
+    )
+    row = conn.execute(
+        "SELECT last_num FROM code_counters WHERE prefix=?", (prefix,)
+    ).fetchone()
+    conn.commit()
+    return f"{prefix}-{row['last_num']:0{width}d}"
