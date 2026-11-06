@@ -11,12 +11,17 @@
   register-image <文件> [--project 项目]   独立图入库（分配 IMG-ID + 生成 caption）
   register-video <文件> [--project 项目]   视频登记（分配 VID-ID + 填简介）
   set-intro <VID-0001> --intro 文本   改/补视频简介
-  media [--project 项目]   列出图片/视频
+  media [--project 项目] [--tag 标签]   列出图片/视频
+  index [--kb-name 名称] [--rebuild] [--wait] [--dry-run]   推派生索引到 WeKnora
+  search <关键词> [--kb-name 名称] [--tag 标签]   在 WeKnora 里做内容检索
 """
 import argparse
+import os
 from pathlib import Path
 
-from docarchive import archive, caption, convert, db, ingest, media, migrate
+from docarchive import (archive, caption, convert, db, index, ingest, media,
+                       migrate, weknora)
+from docarchive.env import load_dotenv
 
 
 def cmd_migrate(args):
@@ -158,6 +163,87 @@ def cmd_media(args):
     conn.close()
 
 
+DEFAULT_KB_NAME = "052 文档库"
+# spec §7.2：embedding 模型从第一天定死，别让「取第一个」悄悄换模型
+DEFAULT_EMBEDDING_MODEL = "text-embedding-v4"
+
+
+def _weknora_client():
+    """按 .env 连 WeKnora 并登录（凭据只在内存里用，不落盘、不回显）。"""
+    env = {**load_dotenv(), **os.environ}
+    base = env.get("WEKNORA_BASE_URL")
+    if not base:
+        raise SystemExit("缺少 WEKNORA_BASE_URL（写在 .env 里）")
+    client = weknora.WeKnoraClient(
+        base, email=env.get("WEKNORA_EMAIL"), password=env.get("WEKNORA_PASSWORD"),
+    )
+    try:
+        client.login()
+    except weknora.WeKnoraError as e:
+        raise SystemExit(f"连 WeKnora 失败：{e}")
+    return client
+
+
+def cmd_index(args):
+    conn = db.connect(args.db)
+    units = index.collect_units(conn, _archive_dir(args.db))
+    conn.close()
+    if args.dry_run:
+        plan = index.plan_units(units)
+        print(f"（dry-run）将推送 {plan.units} 条知识，标签 {len(plan.tags)} 个：")
+        for u in units:
+            print(f"  {u.kind:<8} {u.key:<12} {u.title}")
+        for t in plan.tags:
+            print(f"  标签 {t}")
+        return
+
+    client = _weknora_client()
+    model = args.embedding_model or DEFAULT_EMBEDDING_MODEL
+    try:
+        emb = client.embedding_model_id(model)
+        if not emb:
+            raise SystemExit(f"空间里没有名为「{model}」的 embedding 模型；"
+                             f"用 --embedding-model 指定实际模型名")
+        report = index.index_units(units, client, kb_name=args.kb_name,
+                                   embedding_model_id=emb, rebuild=args.rebuild)
+    except (index.IndexExistsError, weknora.WeKnoraError) as e:
+        raise SystemExit(str(e))
+    print(f"推送 {report.units} 条知识 → 知识库「{args.kb_name}」({report.kb_id})，"
+          f"标签 {len(report.tags)} 个")
+    if args.wait and report.knowledge_ids:
+        print("等 WeKnora 解析…")
+        try:
+            statuses = client.wait_knowledge(report.knowledge_ids)
+        except weknora.WeKnoraError as e:
+            raise SystemExit(f"查解析状态失败：{e}")
+        done = sum(1 for s in statuses.values() if s == "completed")
+        failed = [k for k, s in statuses.items() if s == "failed"]
+        print(f"解析完成 {done}/{len(statuses)}" + (f"，失败 {len(failed)} 条" if failed else ""))
+
+
+def cmd_search(args):
+    client = _weknora_client()
+    try:
+        kb_id = client.find_kb(args.kb_name)
+        if not kb_id:
+            raise SystemExit(f"知识库「{args.kb_name}」不存在，先跑 index")
+        tag_ids = client.tag_ids_for(kb_id, args.tag or [])
+        hits = client.search(args.query, [kb_id], tag_ids=tag_ids,
+                             match_count=max(1, min(args.limit, 200)))
+    except weknora.WeKnoraError as e:
+        raise SystemExit(str(e))
+    if not hits:
+        print("没搜到（索引可能还没解析完，或关键词不合适）")
+        return
+    print(f"命中 {len(hits)} 条：")
+    for h in hits:
+        title = h.get("knowledge_title") or h.get("title") or "-"
+        score = h.get("score")
+        score_s = f"{score:.3f}" if isinstance(score, (int, float)) else "-"
+        snippet = " ".join((h.get("content") or "").split())[:160]
+        print(f"  [{score_s}] {title}：{snippet}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="团队文档归档系统 CLI")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -242,6 +328,23 @@ def main():
     p.add_argument("--tag", default=None, help="只看挂了某关联标签的")
     p.add_argument("--db", type=Path, default=Path("data/truth.db"))
     p.set_defaults(func=cmd_media)
+
+    p = sub.add_parser("index", help="把真相源推成 WeKnora 派生索引")
+    p.add_argument("--db", type=Path, default=Path("data/truth.db"))
+    p.add_argument("--kb-name", default=DEFAULT_KB_NAME, help="WeKnora 知识库名")
+    p.add_argument("--embedding-model", default=None,
+                   help=f"embedding 模型名（默认 {DEFAULT_EMBEDDING_MODEL}，spec §7.2 钉死）")
+    p.add_argument("--rebuild", action="store_true", help="删掉同名知识库重建")
+    p.add_argument("--wait", action="store_true", help="等 WeKnora 解析完再返回")
+    p.add_argument("--dry-run", action="store_true", help="只统计，不连 WeKnora")
+    p.set_defaults(func=cmd_index)
+
+    p = sub.add_parser("search", help="在 WeKnora 里做内容检索")
+    p.add_argument("query", help="关键词或自然语言")
+    p.add_argument("--kb-name", default=DEFAULT_KB_NAME, help="WeKnora 知识库名")
+    p.add_argument("--tag", action="append", help="按标签过滤（可重复，如 项目/浮标项目）")
+    p.add_argument("--limit", type=int, default=5, help="返回条数（默认 5）")
+    p.set_defaults(func=cmd_search)
 
     args = ap.parse_args()
     args.func(args)

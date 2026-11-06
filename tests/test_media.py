@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from docarchive import caption as capmod, db as appdb, media
+from docarchive import caption as capmod, db as appdb, env, media
 
 
 @pytest.fixture
@@ -241,9 +241,9 @@ def test_config_from_env_uses_caption_vars_then_zhipu(monkeypatch):
 def test_dotenv_loader_reads_env_file(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("# 注释\nZHIPU_API_KEY=from-file\nWEKNORA_EMAIL=  x@y.z \n", encoding="utf-8")
-    env = capmod.load_dotenv(env_file)
-    assert env["ZHIPU_API_KEY"] == "from-file"
-    assert env["WEKNORA_EMAIL"] == "x@y.z"
+    loaded = env.load_dotenv(env_file)
+    assert loaded["ZHIPU_API_KEY"] == "from-file"
+    assert loaded["WEKNORA_EMAIL"] == "x@y.z"
 
 
 def test_vlm_captioner_posts_openai_payload(monkeypatch):

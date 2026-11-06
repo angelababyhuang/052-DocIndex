@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Protocol
 
+from docarchive.env import load_dotenv
+
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MODEL = "glm-4v-flash"
 DEFAULT_PROMPT = (
@@ -50,21 +52,6 @@ class VLMConfig:
     api_key: str
     prompt: str = DEFAULT_PROMPT
     timeout: int = DEFAULT_TIMEOUT
-
-
-def load_dotenv(path: str | Path = ".env") -> dict[str, str]:
-    """读 KEY=VALUE 形式的 .env（不引依赖，够用就行）。"""
-    p = Path(path)
-    if not p.is_file():
-        return {}
-    out: dict[str, str] = {}
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        out[key.strip()] = value.strip().strip('"').strip("'")
-    return out
 
 
 def config_from_env(env: Mapping[str, str] | None = None) -> VLMConfig | None:

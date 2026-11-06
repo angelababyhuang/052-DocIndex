@@ -96,3 +96,69 @@ def test_cli_scan_date_dir_as_root_works(tmp_path, monkeypatch, capsys, db_path)
     (d / "a.txt").write_text("x")
     run_cli(monkeypatch, "scan", str(d), "--since", "2026-11-04", "--db", str(db_path))
     assert "新登记 1 条" in capsys.readouterr().out
+
+
+# ---------- #15：index / search ----------
+
+def _seed_converted_doc(db_path, archive_dir):
+    from docarchive import db as appdb
+
+    conn = appdb.connect(db_path)
+    conn.execute("INSERT INTO projects(name) VALUES ('浮标项目')")
+    conn.execute(
+        "INSERT INTO documents(title, project_id, category, current_version_id) "
+        "VALUES ('连杆方案', 1, '测试', 1)"
+    )
+    md = archive_dir / "doc-1" / "v1-a.md"
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text("# 连杆方案\n\n连杆间隙复测 0.02mm。", encoding="utf-8")
+    conn.execute(
+        "INSERT INTO versions(document_id, archive_path, markdown_path) "
+        "VALUES (1, 'doc-1/v1-a.docx', 'doc-1/v1-a.md')"
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_cli_index_dry_run_counts_units(tmp_path, monkeypatch, capsys, db_path):
+    _seed_converted_doc(db_path, db_path.parent / "archive")  # CLI 的受管目录 = db 同级 archive/
+    run_cli(monkeypatch, "index", "--dry-run", "--db", str(db_path))
+    out = capsys.readouterr().out
+    assert "将推送 1 条知识" in out
+    assert "项目/浮标项目" in out and "类别/测试" in out
+
+
+class _FakeWeKnora:
+    def __init__(self):
+        self.searched = None
+
+    def find_kb(self, name):
+        return "kb-1"
+
+    def tag_ids_for(self, kb_id, names):
+        return ["t-1"]
+
+    def search(self, query, kb_ids, tag_ids=(), match_count=5):
+        self.searched = (query, tuple(kb_ids), tuple(tag_ids), match_count)
+        return [{"knowledge_title": "连杆方案", "score": 0.87,
+                 "content": "连杆间隙复测 0.02mm。"}]
+
+
+def test_cli_search_prints_hits(tmp_path, monkeypatch, capsys, db_path):
+    fake = _FakeWeKnora()
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+    run_cli(monkeypatch, "search", "连杆间隙", "--tag", "项目/浮标项目", "--limit", "3")
+    out = capsys.readouterr().out
+    assert "连杆方案" in out and "0.870" in out and "连杆间隙复测" in out
+    assert fake.searched == ("连杆间隙", ("kb-1",), ("t-1",), 3)
+
+
+def test_cli_search_missing_kb_exits(tmp_path, monkeypatch, capsys, db_path):
+    class NoKb(_FakeWeKnora):
+        def find_kb(self, name):
+            return None
+
+    monkeypatch.setattr(cli, "_weknora_client", lambda: NoKb())
+    with pytest.raises(SystemExit) as ei:
+        run_cli(monkeypatch, "search", "x")
+    assert "先跑 index" in str(ei.value)
