@@ -6,6 +6,10 @@ WeKnora 到底把哪些旋钮暴露给逐请求调用、RRF 权重能不能按�
 固定版本：WeKnora **v0.9.0**（tag `f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7`；调研时 main 为 `e3fb2335`）。本机部署实测为 **v0.8.0**（`GET /api/v1/system/info`：`version=0.8.0`、`commit_id=1edcd54`），v0.8.0 与 v0.9.0 在「逐请求覆盖」上有关键差异，见 §1.1。
 取证方式：仓库 `website-docs/` 与 Go 源码（固定 commit 链接）+ 本机 `GET /api/v1/tenants/kv/retrieval-config` 只读探测 + 052 现有代码。
 
+> **决策后记（2026-11-06）**：用户拍板 #22 **不做同义词/别名/权重**——自然语言查询直接用
+> WeKnora RAG，近义表达由向量空间自然覆盖。本报告保留作背景与版本差异记录；#22 已收窄为
+> 「检索结果带文档位置（`custom_metadata.文档=doc-<id>`）+ 修 `--limit` 客户端截断」。
+
 ---
 
 ## 0. 结论速览
@@ -317,6 +321,7 @@ score    = rrfScore / maxRRF        # 归一化到 [0,1]
 | PUT retrieval-config 的权限 | 未实测 | 只读 GET 可用；PUT 要 Admin，本文没有写。 |
 | `rrf_*` 的 PUT 行为 | 已验证（源码），未实测 | 无范围校验；`<=0` 回退默认；PUT 整体替换。 |
 | 多查询合并的成本/排序 | 未实测 | rerank 调用次数与分数可比性需要实测。 |
+| `custom_metadata` 写入时机 | 已验证 | 解析完成会回写 knowledge 行；解析中写会被覆盖（真机 3 条丢 1 条）。必须先等解析完成。 |
 | 版本漂移 | **中风险** | 线上是 v0.8.0，不是 v0.9.x；`knowledge-search` 的逐请求覆盖不存在（§1.1）。升级到 v0.8.3+ 后需重核本文链接与 AC。 |
 
 ---

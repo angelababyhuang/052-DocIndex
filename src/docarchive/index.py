@@ -73,6 +73,8 @@ class IndexClient(Protocol):
     def set_knowledge_metadata(self, knowledge_id: str,
                                metadata: Mapping[str, object]) -> None: ...
 
+    def wait_knowledge(self, kids: Iterable[str]) -> dict[str, str]: ...
+
 
 class SearchClient(Protocol):
     """检索要的 WeKnora 能力（比推索引少得多）。"""
@@ -116,6 +118,18 @@ def planned_tags(units: Iterable[Unit]) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def knowledge_metadata(unit: Unit) -> dict[str, object]:
+    """一条知识要写的 custom_metadata：文档位置 + 图片清单（空则不写）。
+
+    `文档` 让检索结果能回查真相源里的受管文件（#22）；`图片` 是内嵌图清单
+    （#21）。图片/视频条目没有 `文档` 字段。
+    """
+    fields = manifest.encode(unit.images)
+    if unit.kind == "document":
+        fields[manifest.DOCUMENT_KEY] = unit.key
+    return fields
+
+
 def index_units(units: Iterable[Unit], client: IndexClient, *, kb_name: str,
                 embedding_model_id: str | None = None,
                 rebuild: bool = False) -> IndexReport:
@@ -123,6 +137,9 @@ def index_units(units: Iterable[Unit], client: IndexClient, *, kb_name: str,
 
     同名 KB 已存在时默认报错（防止重复推送把库塞脏），要重来就 rebuild=True
     （删掉同名 KB 从零重建——索引本来就是派生物）。
+
+    建完知识后会**等解析完成**再写 custom_metadata：WeKnora 解析完成时会回写
+    knowledge 行，解析中写会被覆盖（真机实测 3 条会丢 1 条）。
     """
     units = list(units)
     kb_id = client.find_kb(kb_name)
@@ -137,18 +154,25 @@ def index_units(units: Iterable[Unit], client: IndexClient, *, kb_name: str,
         kb_id = client.create_kb(kb_name, embedding_model_id)
 
     tag_ids = {name: client.ensure_tag(kb_id, name) for name in planned_tags(units)}
-    kids: list[str] = []
+    kids = [
+        client.create_knowledge(kb_id, unit.title, unit.content,
+                                [tag_ids[t] for t in unit.tags])
+        for unit in units
+    ]
+    # WeKnora 解析完成时会回写 knowledge 行；在解析完成前写 custom_metadata
+    # 会被它覆盖（真机实测，3 条里会随机丢 1 条）。所以先等解析，再写元数据。
+    fields_by_kid = {kid: knowledge_metadata(unit) for kid, unit in zip(kids, units)}
+    needing = [kid for kid, fields in fields_by_kid.items() if fields]
+    if needing:
+        client.wait_knowledge(needing)
     warnings: list[str] = []
-    for unit in units:
-        kid = client.create_knowledge(kb_id, unit.title, unit.content,
-                                      [tag_ids[t] for t in unit.tags])
-        kids.append(kid)
-        fields = manifest.encode(unit.images)
+    for unit, kid in zip(units, kids):
+        fields = fields_by_kid[kid]
         if not fields:
             continue
         try:
             client.set_knowledge_metadata(kid, fields)
-        except Exception as e:  # 降级：图回指没了，但条目已经进索引
+        except Exception as e:  # 降级：位置/图回指没了，但条目已经进索引
             warnings.append(f"{unit.title}（{unit.key}）：{type(e).__name__}: {e}")
     return IndexReport(kb_id=kb_id, units=len(units), tags=tuple(tag_ids),
                        knowledge_ids=tuple(kids),

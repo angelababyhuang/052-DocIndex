@@ -48,6 +48,14 @@ class HitImages:
         return tuple(code for code in self.knowledge if code not in self.chunk)
 
 
+def document_ref(hit: Mapping) -> str | None:
+    """命中条目对应的真相源文档（`custom_metadata.文档 = doc-<id>`）。
+
+    旧索引没有该字段，返回 None；调用方据此只提示、不报错（#22）。
+    """
+    return manifest.document_ref(hit.get("knowledge_custom_metadata"))
+
+
 def hit_image_codes(hit: Mapping) -> HitImages:
     """从一条 WeKnora 检索结果里取图片编号；字段缺失/形状不对都退化成空。"""
     content = hit.get("content")

@@ -199,6 +199,7 @@ def _seed_converted_doc(db_path, archive_dir, md_text=None):
     md = archive_dir / "doc-1" / "v1-a.md"
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text(md_text or "# 连杆方案\n\n连杆间隙复测 0.02mm。", encoding="utf-8")
+    (archive_dir / "doc-1" / "v1-a.docx").write_bytes(b"docx bytes")
     conn.execute(
         "INSERT INTO versions(document_id, archive_path, markdown_path) "
         "VALUES (1, 'doc-1/v1-a.docx', 'doc-1/v1-a.md')"
@@ -379,13 +380,16 @@ def test_cli_index_reports_manifest_write_failure(tmp_path, monkeypatch, capsys,
         def create_knowledge(self, kb_id, title, content, tag_ids=()):
             return "k-1"
 
+        def wait_knowledge(self, kids):
+            return {kid: "completed" for kid in kids}
+
         def set_knowledge_metadata(self, knowledge_id, metadata):
             raise RuntimeError("WeKnora 500")
 
     monkeypatch.setattr(cli, "_weknora_client", lambda: _IndexFake())
     run_cli(monkeypatch, "index", "--db", str(db_path))
     out = capsys.readouterr().out
-    assert "图片清单写入失败" in out and "WeKnora 500" in out
+    assert "知识元数据写入失败" in out and "WeKnora 500" in out
     assert "推送 1 条知识" in out  # 清单失败不挡入库
 
 
@@ -431,3 +435,53 @@ def test_cli_search_reports_truncated_manifest(tmp_path, monkeypatch, capsys, db
 
     out = capsys.readouterr().out
     assert "只列了前 1 张，共 150 张" in out
+
+
+def test_cli_search_prints_document_path(tmp_path, monkeypatch, capsys, db_path):
+    archive_dir = db_path.parent / "archive"
+    _seed_converted_doc(db_path, archive_dir)
+    fake = _ImageHitWeKnora({
+        "knowledge_title": "连杆方案", "score": 0.9,
+        "content": "连杆间隙复测 0.02mm",
+        "knowledge_custom_metadata": "文档: doc-1",
+    })
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+
+    run_cli(monkeypatch, "search", "连杆间隙", "--db", str(db_path))
+
+    out = capsys.readouterr().out
+    assert "文档 doc-1" in out
+    assert str((archive_dir / "doc-1" / "v1-a.docx").resolve()) in out
+
+
+def test_cli_search_hints_stale_index_without_document_ref(tmp_path, monkeypatch,
+                                                          capsys, db_path):
+    _seed_converted_doc(db_path, db_path.parent / "archive")
+    fake = _ImageHitWeKnora({
+        "knowledge_title": "连杆方案", "score": 0.9,
+        "content": "连杆间隙复测 0.02mm",
+    })
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+
+    run_cli(monkeypatch, "search", "连杆间隙", "--db", str(db_path))
+
+    out = capsys.readouterr().out
+    assert "index --rebuild" in out
+
+
+def test_cli_search_truncates_hits_to_limit(tmp_path, monkeypatch, capsys, db_path):
+    _seed_converted_doc(db_path, db_path.parent / "archive")
+
+    class _ManyHits(_FakeWeKnora):
+        def search(self, query, kb_ids, tag_ids=(), match_count=5):
+            return [
+                {"knowledge_title": "第一篇", "score": 0.9, "content": "a"},
+                {"knowledge_title": "第二篇", "score": 0.8, "content": "b"},
+                {"knowledge_title": "第三篇", "score": 0.7, "content": "c"},
+            ]
+
+    monkeypatch.setattr(cli, "_weknora_client", lambda: _ManyHits())
+    run_cli(monkeypatch, "search", "x", "--db", str(db_path), "--limit", "2")
+    out = capsys.readouterr().out
+    assert "第一篇" in out and "第二篇" in out
+    assert "第三篇" not in out

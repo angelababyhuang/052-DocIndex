@@ -248,7 +248,7 @@ def cmd_index(args):
     print(f"推送 {report.units} 条知识 → 知识库「{args.kb_name}」({report.kb_id})，"
           f"标签 {len(report.tags)} 个")
     for w in report.metadata_warnings:
-        print(f"  ⚠ 图片清单写入失败：{w}")
+        print(f"  ⚠ 知识元数据写入失败：{w}")
     if args.wait and report.knowledge_ids:
         print("等 WeKnora 解析…")
         try:
@@ -269,8 +269,10 @@ def cmd_search(args):
         if not kb_id:
             raise SystemExit(f"知识库「{args.kb_name}」不存在，先跑 index")
         tag_ids = client.tag_ids_for(kb_id, wanted)
-        hits = client.search(args.query, [kb_id], tag_ids=tag_ids,
-                             match_count=max(1, min(args.limit, 200)))
+        limit = max(1, min(args.limit, 200))
+        hits = client.search(args.query, [kb_id], tag_ids=tag_ids, match_count=limit)
+        # 线上 WeKnora v0.8.0 的 knowledge-search 忽略 match_count；客户端再截一次
+        hits = hits[:limit]
     except weknora.WeKnoraError as e:
         raise SystemExit(str(e))
     if not hits:
@@ -278,6 +280,7 @@ def cmd_search(args):
         return
     conn = _open_truth_readonly(args.db)
     archive_dir = _archive_dir(args.db)
+    stale_index = False
     try:
         print(f"命中 {len(hits)} 条：")
         for h in hits:
@@ -286,10 +289,26 @@ def cmd_search(args):
             score_s = f"{score:.3f}" if isinstance(score, (int, float)) else "-"
             snippet = " ".join((h.get("content") or "").split())[:160]
             print(f"  [{score_s}] {title}：{snippet}")
-            _print_hit_images(conn, archive_dir, search.hit_image_codes(h))
+            doc_ref = search.document_ref(h)
+            imgs = search.hit_image_codes(h)
+            if doc_ref:
+                _print_hit_document(conn, archive_dir, doc_ref)
+            elif not imgs.unit_image and not title.startswith(("图片 ", "视频 ")):
+                stale_index = True
+            _print_hit_images(conn, archive_dir, imgs)
+        if stale_index:
+            print("（部分命中没有文档位置：索引可能由旧版生成，"
+                  "运行 index --rebuild 后可显示）")
     finally:
         if conn is not None:
             conn.close()
+
+
+def _print_hit_document(conn, archive_dir: Path, doc_ref: str) -> None:
+    """每条命中下打印真相源里的受管文件位置；取不到只标注原因。"""
+    loc = archive.resolve_document(conn, archive_dir, doc_ref)
+    detail = loc.path or f"（{loc.problem}）"
+    print(f"    文档 {doc_ref}  {detail}")
 
 
 def _print_hit_images(conn, archive_dir: Path, imgs: search.HitImages) -> None:
@@ -410,7 +429,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--embedding-model", default=None,
                    help=f"embedding 模型名（默认 {DEFAULT_EMBEDDING_MODEL}，spec §7.2 钉死）")
     p.add_argument("--rebuild", action="store_true", help="删掉同名知识库重建")
-    p.add_argument("--wait", action="store_true", help="等 WeKnora 解析完再返回")
+    p.add_argument("--wait", action="store_true",
+                   help="额外打印解析状态（index 本来就会等解析完再写元数据）")
     p.add_argument("--dry-run", action="store_true", help="只统计，不连 WeKnora")
     p.set_defaults(func=cmd_index)
 

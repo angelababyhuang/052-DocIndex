@@ -68,3 +68,18 @@ def test_hit_image_codes_ignores_non_image_titles():
     assert search.hit_image_codes({"knowledge_title": "方案里的 IMG-0001 说明"}).unit_image == ()
     assert search.hit_image_codes({"knowledge_title": "图片 IMG-1"}).unit_image == ()
     assert search.hit_image_codes({"knowledge_title": None}).unit_image == ()
+
+
+def test_document_ref_reads_flattened_metadata():
+    assert search.document_ref({"knowledge_custom_metadata": "文档: doc-12"}) == "doc-12"
+    assert search.document_ref({"knowledge_custom_metadata": {"文档": "doc-7"}}) == "doc-7"
+    assert search.document_ref(
+        {"knowledge_custom_metadata": "文档: doc-3\n图片: IMG-0001"}
+    ) == "doc-3"
+
+
+def test_document_ref_is_none_for_old_index_or_other_metadata():
+    assert search.document_ref({}) is None
+    assert search.document_ref({"knowledge_custom_metadata": None}) is None
+    assert search.document_ref({"knowledge_custom_metadata": "图片: IMG-0001"}) is None
+    assert search.document_ref({"knowledge_custom_metadata": "来源: 052"}) is None
