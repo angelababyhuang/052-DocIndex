@@ -57,6 +57,7 @@ class FakeClient:
 def test_collect_units_builds_document_image_video(conn, archive_dir, tmp_path):
     doc_id, vid, _ = _archived_doc(conn, archive_dir, tmp_path)
 
+    pytest.importorskip("PIL")
     from PIL import Image
     img = tmp_path / "shot.png"
     Image.new("RGB", (80, 60), "white").save(img)
@@ -98,6 +99,7 @@ def test_collect_units_skips_documents_without_md(conn, archive_dir, tmp_path):
 
 def test_image_without_caption_still_indexed_by_code(conn, archive_dir, tmp_path):
     """没 caption 的图也要能按编号/项目命中（spec §7.1 的承诺），正文退化成编号+名称。"""
+    pytest.importorskip("PIL")
     from PIL import Image
     img = tmp_path / "shot.png"
     Image.new("RGB", (80, 60), "white").save(img)

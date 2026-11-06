@@ -71,14 +71,16 @@ def cmd_scan(args):
                 conn, args.dir, source_type=args.source, since=args.since,
                 all_files=args.all_files, archive_dir=_archive_dir(args.db),
                 project=args.project, tags=args.tag or (), captioner=cap,
-                route_media=not args.no_media,
             )
         except (ValueError, FileNotFoundError) as e:
             raise SystemExit(str(e))
         print(f"扫描 {args.dir} → 文档 {stats.occurrences} / "
-              f"图片 {stats.images}（新 {stats.images_new}）/ "
-              f"视频 {stats.videos}（新 {stats.videos_new}）")
-        nothing = not (stats.occurrences or stats.images or stats.videos)
+              f"图片 {stats.images_seen}（新 {stats.images_new}）/ "
+              f"视频 {stats.videos_seen}（新 {stats.videos_new}）")
+        # 媒体进了库但描述没生成：逐条报出来（和 convert/register-image 同一句话）
+        for err in stats.caption_errors:
+            print(f"  ⚠ 描述生成失败：{err}")
+        nothing = not (stats.occurrences or stats.images_seen or stats.videos_seen)
         if nothing and args.since and not args.all_files:
             skipped = [d.name for d in sorted(args.dir.iterdir())
                        if d.is_dir() and not ingest.is_date_dir(d.name)]
@@ -291,8 +293,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="全量扫描，不看日期目录结构（对应 014 的 --since all）")
     p.add_argument("--project", default=None, help="本次登记的媒体的主归属项目")
     p.add_argument("--tag", action="append", help="本次登记的媒体的关联项目标签（可重复）")
-    p.add_argument("--no-media", action="store_true",
-                   help="不把图片/视频送进媒体库，退回普通出现登记")
     p.add_argument("--no-caption", action="store_true", help="不生成图片 caption")
     p.set_defaults(func=cmd_scan)
 

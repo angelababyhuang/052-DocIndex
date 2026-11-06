@@ -64,13 +64,16 @@ def new_doc(conn: sqlite3.Connection, oid: int, project: str, archive_dir: Path,
     """确认一条出现为新文档：建 document + version + 复制进受管目录。
 
     媒体（图片/视频）不是文档，这里直接拒绝——它们该走 media 的 register 接口
-    （票 #20 的 D3）。拒绝发生在建任何实体之前，不留半成品。
+    （票 #20 的 D3）。拒绝发生在建任何实体之前，不留半成品。消息给的是操作者
+    真能用的两条路：重扫那个目录（scan 已不再把媒体登记成出现），或手工登记；
+    剩下的媒体出现只可能来自 #20 之前的老库。
     """
     occ = get_occ(conn, oid)
     if media.is_media(occ["file_name"]):
         raise ValueError(
             f"出现 #{oid}「{occ['file_name']}」是媒体文件，不能建成文档；"
-            f"图片用 register-image、视频用 register-video 登记进媒体库"
+            f"重新扫描它所在的目录即可让图片/视频自动进媒体库，"
+            f"或者用 register-image / register-video 手工登记"
         )
     pid = db.get_or_create_project(conn, project)
     title = title or Path(occ["file_name"]).stem
