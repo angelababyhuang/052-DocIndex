@@ -26,11 +26,14 @@ def _archived_doc(conn, archive_dir, tmp_path, *, title="连杆方案", category
 class FakeClient:
     """记录调用顺序的假 WeKnora 客户端。"""
 
-    def __init__(self, existing_kb=None, metadata_error=None):
+    def __init__(self, existing_kb=None, metadata_error=None, wait_error=None,
+                 wait_status="completed"):
         self.calls = []
         self.kb_id = "kb-1"
         self.existing_kb = existing_kb
         self.metadata_error = metadata_error
+        self.wait_error = wait_error
+        self.wait_status = wait_status
 
     def find_kb(self, name):
         self.calls.append(("find_kb", name))
@@ -59,7 +62,9 @@ class FakeClient:
     def wait_knowledge(self, kids):
         kids = list(kids)
         self.calls.append(("wait_knowledge", tuple(kids)))
-        return {kid: "completed" for kid in kids}
+        if self.wait_error:
+            raise self.wait_error
+        return {kid: self.wait_status for kid in kids}
 
     def search(self, query, kb_ids, tag_ids=(), match_count=5):
         self.calls.append(("search", query, tuple(kb_ids), tuple(tag_ids), match_count))
@@ -268,3 +273,33 @@ def test_index_units_degrades_when_manifest_write_fails(conn, archive_dir, tmp_p
     assert [c for c in client.calls if c[0] == "create_knowledge"]
 
 
+
+
+def test_index_units_skips_metadata_when_wait_fails(conn, archive_dir, tmp_path):
+    _archived_doc(conn, archive_dir, tmp_path)
+    client = FakeClient(wait_error=RuntimeError("poll boom"))
+    report = index.index_units(index.collect_units(conn, archive_dir), client,
+                               kb_name="052 文档库")
+    assert report.units == 1
+    assert any("等解析失败" in w for w in report.parse_warnings)
+    assert report.metadata_warnings == ()
+    assert [c for c in client.calls if c[0] == "set_knowledge_metadata"] == []
+
+
+def test_index_units_skips_metadata_when_parse_incomplete(conn, archive_dir, tmp_path):
+    _archived_doc(conn, archive_dir, tmp_path)
+    client = FakeClient(wait_status="processing")
+    report = index.index_units(index.collect_units(conn, archive_dir), client,
+                               kb_name="052 文档库")
+    assert any("解析未完成" in w for w in report.parse_warnings)
+    assert [c for c in client.calls if c[0] == "set_knowledge_metadata"] == []
+
+
+def test_index_units_writes_metadata_when_parse_failed(conn, archive_dir, tmp_path):
+    """解析失败不会再回写，元数据可以安全写；但要作为警告报出来。"""
+    _archived_doc(conn, archive_dir, tmp_path)
+    client = FakeClient(wait_status="failed")
+    report = index.index_units(index.collect_units(conn, archive_dir), client,
+                               kb_name="052 文档库")
+    assert any("解析失败" in w for w in report.parse_warnings)
+    assert [c for c in client.calls if c[0] == "set_knowledge_metadata"]

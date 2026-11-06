@@ -39,9 +39,9 @@
 `index.collect_units` 产出的文档条目带 `Unit.images`（具体在 `_document_units`
 里从**实际要推送的 md** 抽 `{{IMG-####}}`，去重保序）；`index.index_units` 在创建
 知识拿到 `knowledge_id` 后，用 `PUT /api/v1/knowledge/:id` 写
-`custom_metadata.图片 = "IMG-0001,IMG-0002,…"`。没有内嵌图的文档不写（少一次
-请求、也少一份噪声元数据）。编码/解析格式只定义一处（`manifest.py`），写
-（index）和读（search）共用。
+`custom_metadata.图片 = "IMG-0001,IMG-0002,…"`。文档条目**总是**写 `文档`
+（见决策 6），有内嵌图时再写 `图片`；图片/视频条目不写。编码/解析格式只定义一处
+（`manifest.py`），写（index）和读（search）共用。
 
 清单从 md 里取而不是从 `document_images` 里取：清单描述的是**这条知识条目正文
 引用了哪些图**，md 的标记才是索引里真实存在的东西；`document_images` 仍是
@@ -72,8 +72,9 @@
   `resolve_image` 原样返回即可，不用改调用点。
 
 **4. 每一层失败都降级，不挡文本。**
-- 索引：元数据 PUT 失败只记 `IndexReport.metadata_warnings`，CLI 打
-  `⚠ 知识元数据写入失败：…`，知识条目照常入索引（位置/图回指降级，文本检索不受影响）。
+- 索引：解析等待失败或仍有 `pending/processing` 时不写元数据（解析回写会覆盖），
+  记 `IndexReport.parse_warnings`；PUT 失败只记 `metadata_warnings`，CLI 打
+  `⚠ …`。两种情况知识条目都照常入索引（位置/图回指降级，文本检索不受影响）。
 - 检索：真相源没打开（文件不存在、只读打开失败）、编号未登记、母本文件丢了，
   都只打印编号 + 原因（「真相源不可用」「未登记」「母本缺失：<路径>」）；
   文本命中照常返回。搜索用只读连接打开真相源，**不会凭空建库**。
@@ -89,7 +90,8 @@
 元数据在 WeKnora 解析**完成后**写：解析回写 knowledge 行会覆盖解析中写入的
 `custom_metadata`（真机 3 条里丢 1 条）；`index` 因此先 `wait_knowledge` 再 PUT。
 检索命中文档条目时，`search` 用该字段回查真相源 `documents.current_version_id` →
-`versions.archive_path`（缺失时 `markdown_path`），打印受管文件绝对路径。没有按
+`versions.archive_path`（缺失时 `markdown_path`），打印受管文件绝对路径。等待
+解析失败/超时（未 `completed`）的知识跳过元数据，只警告。没有按
 `knowledge_title` 匹配：标题可重复、也会随改名漂移，`doc-<id>` 才是真相源里的稳定
 标识。代价是旧索引要 `index --rebuild` 一次才有该字段；没有字段时只提示重建，
 不挡文本命中。

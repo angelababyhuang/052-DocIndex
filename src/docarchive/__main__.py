@@ -247,6 +247,8 @@ def cmd_index(args):
         raise SystemExit(str(e))
     print(f"推送 {report.units} 条知识 → 知识库「{args.kb_name}」({report.kb_id})，"
           f"标签 {len(report.tags)} 个")
+    for w in report.parse_warnings:
+        print(f"  ⚠ {w}")
     for w in report.metadata_warnings:
         print(f"  ⚠ 知识元数据写入失败：{w}")
     if args.wait and report.knowledge_ids:
@@ -293,7 +295,7 @@ def cmd_search(args):
             imgs = search.hit_image_codes(h)
             if doc_ref:
                 _print_hit_document(conn, archive_dir, doc_ref)
-            elif not imgs.unit_image and not title.startswith(("图片 ", "视频 ")):
+            elif not search.is_unit_hit(h):
                 stale_index = True
             _print_hit_images(conn, archive_dir, imgs)
         if stale_index:

@@ -56,8 +56,9 @@ PUT /api/v1/knowledge/:kid
 - **检索结果里是拍平文本**：`knowledge_custom_metadata` 为 `键: 值`、多字段按
   换行分隔、键按字典序（`CustomMetadataText()` 的输出），空元数据是 `null`。
   解析按行取 `图片:` / `文档:` 前缀，不要假设 JSON。
-- 052 的约定：文档条目带 `文档 = doc-<id>`（回查受管文件位置），内嵌图条目带
-  `图片` / `图片数`（#21）。旧索引没有 `文档` 字段，需要 `index --rebuild` 一次。
+- 052 的约定：**文档条目**带 `文档 = doc-<id>`（回查受管文件位置），有内嵌图时
+  再带 `图片` / `图片数`（#21）；图片/视频条目不写。旧索引没有 `文档` 字段，需要
+  `index --rebuild` 一次。
 - 元数据变化会触发一次文档摘要刷新（`summary_status` 转 `pending`），不阻塞解析。
 - **必须在解析完成后写**：解析完成会回写 knowledge 行，解析过程中写的 `custom_metadata`
   可能被覆盖（真机 3 条里丢 1 条）。052 的 `index` 先 `wait_knowledge` 再 PUT。

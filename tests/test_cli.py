@@ -418,6 +418,7 @@ def test_cli_search_prints_image_unit_own_master(tmp_path, monkeypatch, capsys, 
     out = capsys.readouterr().out
     assert f"本图 {code}" in out
     assert str((archive_dir / f"images/{code}.png").resolve()) in out
+    assert "index --rebuild" not in out  # 图片条目不应被当成旧索引
 
 
 def test_cli_search_reports_truncated_manifest(tmp_path, monkeypatch, capsys, db_path):
@@ -485,3 +486,37 @@ def test_cli_search_truncates_hits_to_limit(tmp_path, monkeypatch, capsys, db_pa
     out = capsys.readouterr().out
     assert "第一篇" in out and "第二篇" in out
     assert "第三篇" not in out
+
+
+def test_cli_search_stale_hint_is_not_fooled_by_title_prefix(tmp_path, monkeypatch,
+                                                             capsys, db_path):
+    """普通文档标题以「图片」开头时，也应提示重建（严格按条目格式判断）。"""
+    _seed_converted_doc(db_path, db_path.parent / "archive")
+    fake = _ImageHitWeKnora({
+        "knowledge_title": "图片 方案说明", "score": 0.9,
+        "content": "连杆间隙复测",
+    })
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+
+    run_cli(monkeypatch, "search", "连杆间隙", "--db", str(db_path))
+
+    assert "index --rebuild" in capsys.readouterr().out
+
+
+def test_cli_search_reports_missing_document_file(tmp_path, monkeypatch, capsys, db_path):
+    archive_dir = db_path.parent / "archive"
+    _seed_converted_doc(db_path, archive_dir)
+    (archive_dir / "doc-1" / "v1-a.docx").unlink()
+    (archive_dir / "doc-1" / "v1-a.md").unlink()
+    fake = _ImageHitWeKnora({
+        "knowledge_title": "连杆方案", "score": 0.9,
+        "content": "连杆间隙复测",
+        "knowledge_custom_metadata": "文档: doc-1",
+    })
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+
+    run_cli(monkeypatch, "search", "连杆间隙", "--db", str(db_path))
+
+    out = capsys.readouterr().out
+    assert "文件缺失" in out
+    assert "连杆方案" in out  # 文本命中照常

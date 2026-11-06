@@ -240,3 +240,24 @@ def test_resolve_document_falls_back_when_archive_file_missing(conn, archive_dir
 
     loc = archive.resolve_document(conn, archive_dir, f"doc-{doc_id}")
     assert loc.path == str((archive_dir / md_rel).resolve())
+
+
+def test_document_ref_roundtrip_and_invalid():
+    assert archive.document_ref(12) == "doc-12"
+    assert archive.parse_document_ref("doc-12") == 12
+    assert archive.parse_document_ref("doc-12\n") == 12
+    assert archive.parse_document_ref("12") is None
+    assert archive.parse_document_ref("doc-x") is None
+
+
+def test_resolve_document_passes_remote_path_through(conn, archive_dir, tmp_path):
+    src = tmp_path / "a.txt"
+    src.write_text("hello")
+    occ = _make_occ(conn, source_path=str(src), file_name="a.txt")
+    doc_id, vid = archive.new_doc(conn, occ["id"], "P", archive_dir, title="A")
+    conn.execute("UPDATE versions SET archive_path=? WHERE id=?",
+                 ("https://cos.example.com/a.docx", vid))
+    conn.commit()
+
+    loc = archive.resolve_document(conn, archive_dir, f"doc-{doc_id}")
+    assert loc.path == "https://cos.example.com/a.docx"

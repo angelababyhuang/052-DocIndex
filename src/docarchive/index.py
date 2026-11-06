@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Protocol
 
 from docarchive import imagelib, manifest
-from docarchive.archive import CATEGORIES
+from docarchive.archive import CATEGORIES, document_ref
 
 # 标签维度前缀
 TAG_PROJECT = "项目"
@@ -50,6 +50,8 @@ class IndexReport:
     knowledge_ids: tuple[str, ...] = ()
     # 图片清单写失败不挡入库（图回指降级，文本索引照常）：逐条记原因
     metadata_warnings: tuple[str, ...] = ()
+    # 等解析失败/超时/单条未完成：这些知识不写元数据（避免解析回写覆盖），只警告
+    parse_warnings: tuple[str, ...] = ()
 
 
 class IndexExistsError(RuntimeError):
@@ -161,22 +163,44 @@ def index_units(units: Iterable[Unit], client: IndexClient, *, kb_name: str,
     ]
     # WeKnora 解析完成时会回写 knowledge 行；在解析完成前写 custom_metadata
     # 会被它覆盖（真机实测，3 条里会随机丢 1 条）。所以先等解析，再写元数据。
-    fields_by_kid = {kid: knowledge_metadata(unit) for kid, unit in zip(kids, units)}
-    needing = [kid for kid, fields in fields_by_kid.items() if fields]
+    entries = [(kid, unit, knowledge_metadata(unit)) for kid, unit in zip(kids, units)]
+    needing = [(kid, unit) for kid, unit, fields in entries if fields]
+    parse_warnings: list[str] = []
+    ready: set[str] = set()
     if needing:
-        client.wait_knowledge(needing)
-    warnings: list[str] = []
-    for unit, kid in zip(units, kids):
-        fields = fields_by_kid[kid]
-        if not fields:
+        try:
+            statuses = client.wait_knowledge([kid for kid, _ in needing])
+        except Exception as e:
+            statuses = {}
+            parse_warnings.append(
+                f"等解析失败，未写元数据：{type(e).__name__}: {e}"
+            )
+        else:
+            for kid, unit in needing:
+                status = statuses.get(kid, "unknown")
+                if status in ("completed", "failed"):
+                    ready.add(kid)
+                    if status == "failed":
+                        parse_warnings.append(f"解析失败：{unit.title}（{unit.key}）")
+                else:
+                    parse_warnings.append(
+                        f"解析未完成（{status}），未写元数据：{unit.title}（{unit.key}）"
+                    )
+    metadata_warnings: list[str] = []
+    for kid, unit, fields in entries:
+        if not fields or kid not in ready:
             continue
         try:
             client.set_knowledge_metadata(kid, fields)
         except Exception as e:  # 降级：位置/图回指没了，但条目已经进索引
-            warnings.append(f"{unit.title}（{unit.key}）：{type(e).__name__}: {e}")
+            metadata_warnings.append(
+                f"{unit.title}（{unit.key}）：{type(e).__name__}: {e}"
+            )
     return IndexReport(kb_id=kb_id, units=len(units), tags=tuple(tag_ids),
                        knowledge_ids=tuple(kids),
-                       metadata_warnings=tuple(warnings))
+                       metadata_warnings=tuple(metadata_warnings),
+                       parse_warnings=tuple(parse_warnings))
+
 
 
 # ---------------- 真相源 → 条目 ----------------
@@ -225,7 +249,7 @@ def _document_units(conn: sqlite3.Connection, archive_dir: Path) -> list[Unit]:
                                   "document_id", r["id"], r["project_id"]))
         if r["category"]:
             tags.append(f"{TAG_CATEGORY}/{r['category']}")
-        units.append(Unit("document", f"doc-{r['id']}", r["title"], content,
+        units.append(Unit("document", document_ref(r["id"]), r["title"], content,
                           tuple(tags), imagelib.ref_codes(content)))
     return units
 
