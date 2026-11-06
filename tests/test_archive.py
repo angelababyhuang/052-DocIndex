@@ -104,7 +104,7 @@ def test_zip_occurrence_copies_expanded_entry(conn, archive_dir, tmp_path):
     with zipfile.ZipFile(zp, "w") as zf:
         zf.writestr("inner/doc.txt", "zip content")
     # 登记 zip 内 entry
-    ingest._register_zip_entries(conn, zp)
+    ingest._register_zip_entries(conn, zp, archive_dir=archive_dir)
     occ = conn.execute("SELECT * FROM occurrences WHERE source_type='zip'").fetchone()
     doc_id, vid = archive.new_doc(conn, occ["id"], "P", archive_dir, title="Doc")
     v = conn.execute("SELECT archive_path FROM versions WHERE id=?", (vid,)).fetchone()
@@ -145,6 +145,25 @@ def test_new_doc_refuses_video_occurrence(conn, archive_dir, tmp_path):
 
     with pytest.raises(ValueError, match="register-video"):
         archive.new_doc(conn, occ["id"], "P", archive_dir)
+
+
+def test_new_doc_media_message_names_the_real_remedies(conn, archive_dir, tmp_path):
+    """拒绝信息要给出真能用的补救：重扫该目录（媒体不再走出现）或手动登记。
+
+    这些出现只可能来自 #20 之前的老库，所以提示里不能再说「去掉 --no-media 重扫」
+    这种已经不存在的开关。
+    """
+    src = tmp_path / "shot.png"
+    src.write_bytes(b"fake png bytes")
+    occ = _make_occ(conn, source_path=str(src), file_name="shot.png")
+
+    with pytest.raises(ValueError) as ei:
+        archive.new_doc(conn, occ["id"], "P", archive_dir)
+
+    msg = str(ei.value)
+    assert "register-image" in msg and "register-video" in msg
+    assert "重新扫描" in msg
+    assert "--no-media" not in msg
 
 
 def test_new_doc_still_accepts_documents(conn, archive_dir, tmp_path):

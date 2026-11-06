@@ -8,11 +8,29 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from docarchive import ingest
 
 
+class FakeCaptioner:
+    """测试用 captioner：记录调用次数，可选择抛错；绝不联网。"""
+
+    def __init__(self, text="一张蓝色方框的截图，上面写着 SAMPLE。", error=None):
+        self.text = text
+        self.error = error
+        self.calls = 0
+
+    def describe(self, data: bytes, ext: str | None = None) -> str:
+        self.calls += 1
+        if self.error:
+            raise self.error
+        return self.text
+
+
 def make_png(path: Path, text: str = "SCREEN") -> Path:
-    """白底黑字小图（给内嵌图/独立图/占位符用例）。"""
+    """白底黑字小图（给内嵌图/独立图/占位符用例）。没装 Pillow 就跳过该用例。"""
+    pytest.importorskip("PIL")
     from PIL import Image, ImageDraw
 
     im = Image.new("RGB", (160, 80), "white")

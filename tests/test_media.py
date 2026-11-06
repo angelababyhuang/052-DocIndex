@@ -6,26 +6,10 @@ import os
 import urllib.error
 
 import pytest
-from support import make_mp4_with_mvhd, make_png, make_video
+from support import FakeCaptioner, make_mp4_with_mvhd, make_png, make_video
 
 from docarchive import caption as capmod
 from docarchive import env, media
-
-
-class FakeCaptioner:
-    """测试用 captioner：记录调用次数，可选择抛错。"""
-
-    def __init__(self, text="一张蓝色方框的截图，上面写着 SAMPLE。", error=None):
-        self.text = text
-        self.error = error
-        self.calls = 0
-
-    def describe(self, data: bytes, ext: str | None = None) -> str:
-        self.calls += 1
-        if self.error:
-            raise self.error
-        return self.text
-
 
 # ---------- #20：媒体扩展名识别（scan 分流与 new-doc 拦截共用） ----------
 

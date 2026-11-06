@@ -15,7 +15,7 @@ import sqlite3
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from docarchive import db, fingerprint, imagelib
 from docarchive.caption import Captioner
@@ -54,21 +54,24 @@ class VideoReceipt:
 
 def register_standalone_image(conn: sqlite3.Connection, archive_dir: str | Path,
                               src: str | Path, *, project: str | None = None,
-                              tags: Iterable[str] = (),
+                              tags: Sequence[str] | Iterable[str] = (),
                               captioner: Captioner | None = None,
-                              recaption: bool = False) -> ImageReceipt:
+                              recaption: bool = False,
+                              source: str | None = None) -> ImageReceipt:
     """登记一张独立图：去重分配 IMG-ID、落盘母本、挂项目/标签、生成 caption。
 
     重复登记同一张图时复用原编号：已有 caption 就不再调用模型（省一次推理），
     没有（或 recaption=True）才补/重生成。caption 生成失败只回执错误，不影响入库。
     caption 的网络调用在 commit 之后，避免长时间占着 SQLite 写锁。
+    source 覆盖来源记录（默认取文件路径）：zip 里的图先落临时文件再登记，
+    来源要记压缩包里的位置，不能记一个随后就被删掉的临时路径。
     """
     archive_dir = Path(archive_dir)
     src = Path(src)
     data = src.read_bytes()
 
     reg = imagelib.register_image(
-        conn, archive_dir, data, ext=src.suffix, source=str(src),
+        conn, archive_dir, data, ext=src.suffix, source=source or str(src),
         original_name=src.name,
     )
     _apply_project(conn, "images", "image_project_tags", "image_id", reg.id,
@@ -83,10 +86,12 @@ def register_standalone_image(conn: sqlite3.Connection, archive_dir: str | Path,
 
 def register_video(conn: sqlite3.Connection, archive_dir: str | Path,
                    src: str | Path, *, project: str | None = None,
-                   tags: Iterable[str] = (), intro: str | None = None) -> VideoReceipt:
+                   tags: Sequence[str] | Iterable[str] = (), intro: str | None = None,
+                   source: str | None = None) -> VideoReceipt:
     """登记一个视频：去重分配 VID-ID、落盘母本、记项目/标签/时长、填简介。
 
     同一份视频重复登记复用原编号；已有简介不被后来的登记覆盖（要改走 set_video_intro）。
+    source 覆盖来源记录（默认取文件路径），zip 内的视频用它记压缩包位置。
     """
     archive_dir = Path(archive_dir)
     src = Path(src)
@@ -106,7 +111,7 @@ def register_video(conn: sqlite3.Connection, archive_dir: str | Path,
             "INSERT INTO videos(code, name, sha256, byte_size, ext, original_name, "
             "source, path, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (code, src.stem, sha, src.stat().st_size,
-             imagelib.normalize_ext(src.suffix), src.name, str(src), rel, duration),
+             imagelib.normalize_ext(src.suffix), src.name, source or str(src), rel, duration),
         )
         vid, created = cur.lastrowid, True
 
@@ -176,7 +181,7 @@ def _overview_rows(conn: sqlite3.Connection, table: str, tag_table: str, tag_col
 
 def _apply_project(conn: sqlite3.Connection, table: str, tag_table: str,
                    tag_column: str, entity_id: int, project: str | None,
-                   tags: Iterable[str]) -> None:
+                   tags: Sequence[str] | Iterable[str]) -> None:
     """设主归属（只在为空时设）+ 写关联项目标签。
 
     table / tag_table / tag_column 只由本模块的调用点传字面量，不接用户输入。

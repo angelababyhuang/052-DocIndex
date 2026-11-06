@@ -2,6 +2,7 @@
 import sys
 
 import pytest
+from support import FakeCaptioner, make_pending, make_png, make_video
 
 from docarchive import __main__ as cli
 
@@ -101,8 +102,6 @@ def test_cli_scan_date_dir_as_root_works(tmp_path, monkeypatch, capsys, db_path)
 # ---------- #20：scan 媒体分流 ----------
 
 def _mixed_inbox(tmp_path):
-    from support import make_png, make_video
-
     inbox = tmp_path / "inbox"
     (inbox / "2026-11-05").mkdir(parents=True)
     (inbox / "2026-11-05" / "方案.docx").write_bytes(b"docx bytes")
@@ -112,7 +111,6 @@ def _mixed_inbox(tmp_path):
 
 
 def test_cli_scan_routes_media_and_prints_breakdown(tmp_path, monkeypatch, capsys, db_path):
-    pytest.importorskip("PIL")
     inbox = _mixed_inbox(tmp_path)
 
     run_cli(monkeypatch, "scan", str(inbox), "--project", "浮标项目", "--tag", "测试",
@@ -128,43 +126,47 @@ def test_cli_scan_routes_media_and_prints_breakdown(tmp_path, monkeypatch, capsy
     assert "IMG-0001" in out and "VID-0001" in out and "[测试]" in out
 
 
-def test_cli_scan_no_media_falls_back_to_occurrence(tmp_path, monkeypatch, capsys, db_path):
-    pytest.importorskip("PIL")
-    from support import make_png
+def test_cli_scan_no_longer_has_no_media_flag(tmp_path, monkeypatch, db_path):
+    """--no-media 已删除：媒体总是进媒体库，没有退回出现的开关。"""
+    with pytest.raises(SystemExit):
+        run_cli(monkeypatch, "scan", str(tmp_path), "--no-media", "--db", str(db_path))
 
+
+def test_cli_scan_reports_caption_failures(tmp_path, monkeypatch, capsys, db_path):
+    """caption 失败要逐条打印，和 convert/register-image 同一句话。"""
+    monkeypatch.setattr(cli.caption, "captioner_from_env",
+                        lambda *a, **k: FakeCaptioner(error=RuntimeError("模型超时")))
     inbox = tmp_path / "inbox"
     (inbox / "2026-11-05").mkdir(parents=True)
     make_png(inbox / "2026-11-05" / "shot.png")
 
-    run_cli(monkeypatch, "scan", str(inbox), "--no-media", "--db", str(db_path))
-    out = capsys.readouterr().out
-    assert "文档 1" in out and "图片 0（新 0）" in out
+    run_cli(monkeypatch, "scan", str(inbox), "--db", str(db_path))
 
-    run_cli(monkeypatch, "media", "--db", str(db_path))
-    assert "图片 0 张" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "⚠ 描述生成失败：" in out
+    assert "模型超时" in out
+    assert "图片 1（新 1）" in out  # 失败不挡入库
 
 
 def test_cli_new_doc_on_media_exits_with_guidance(tmp_path, monkeypatch, capsys, db_path):
-    pytest.importorskip("PIL")
-    from support import make_png
+    """#20 之前留下的媒体出现：new-doc 拒绝，并告诉操作者真正的补救办法。"""
+    from docarchive import db as appdb
 
-    inbox = tmp_path / "inbox"
-    (inbox / "2026-11-05").mkdir(parents=True)
-    make_png(inbox / "2026-11-05" / "shot.png")
-    run_cli(monkeypatch, "scan", str(inbox), "--no-media", "--db", str(db_path))
-    capsys.readouterr()
+    png = make_png(tmp_path / "shot.png")
+    conn = appdb.connect(db_path)
+    make_pending(conn, png)  # 老库里遗留的媒体出现
+    conn.commit()
+    conn.close()
 
     with pytest.raises(SystemExit) as ei:
         run_cli(monkeypatch, "new-doc", "1", "--project", "浮标项目", "--db", str(db_path))
     msg = str(ei.value)
     assert "register-image" in msg and "register-video" in msg
+    assert "重新扫描" in msg
 
 
 def test_cli_scan_no_caption_skips_model(tmp_path, monkeypatch, capsys, db_path):
     """--no-caption 时不拿 captioner（KEY 配了也不调模型）。"""
-    pytest.importorskip("PIL")
-    from support import make_png
-
     calls = []
     monkeypatch.setattr(cli.caption, "captioner_from_env",
                         lambda *a, **k: calls.append(1) or None)
