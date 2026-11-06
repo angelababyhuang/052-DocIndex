@@ -66,6 +66,18 @@ def test_image_code_never_reused_after_delete(conn):
     assert db.next_code(conn, "IMG") == "IMG-0004"
 
 
+def test_next_code_does_not_commit(conn):
+    """next_code 不该 commit：号段分配要留在调用方事务里，随实体一起回滚。
+
+    这是 code review 抓出的 bug：next_code 每次分配即 commit，
+    实体插入失败时号段仍前进，造成跳号。
+    """
+    db.next_code(conn, "IMG")
+    # 没 commit → 另一个连接（或回滚后）应看不到这次分配
+    conn.rollback()
+    assert conn.execute("SELECT count(*) FROM code_counters").fetchone()[0] == 0
+
+
 def test_document_image_association(conn):
     conn.execute("INSERT INTO projects(name) VALUES ('P')")
     pid = conn.execute("SELECT id FROM projects WHERE name='P'").fetchone()["id"]

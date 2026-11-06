@@ -113,8 +113,12 @@ def next_code(conn: sqlite3.Connection, prefix: str, width: int = 4) -> str:
 
     单调递增，永不改号、永不复用（删除后不回收）。号段计数器独立于实体表，
     因此删除实体不会让号段回退。
+
+    不 commit：由调用方在自己的事务边界内统一提交，保证「分配号段 + 插入实体」
+    要么一起落库、要么一起回滚。号段与实体同事务时，实体插入失败会让号段也回滚，
+    不会出现「实体没了但号段已消耗」的跳号。
     """
-    # UPSERT：已有则 +1，首次插入从 0 起步后再 +1，得到 1
+    # UPSERT：已有则 +1，首次插入从 1 起步
     conn.execute(
         "INSERT INTO code_counters(prefix, last_num) VALUES (?, 1) "
         "ON CONFLICT(prefix) DO UPDATE SET last_num = last_num + 1",
@@ -123,5 +127,4 @@ def next_code(conn: sqlite3.Connection, prefix: str, width: int = 4) -> str:
     row = conn.execute(
         "SELECT last_num FROM code_counters WHERE prefix=?", (prefix,)
     ).fetchone()
-    conn.commit()
     return f"{prefix}-{row['last_num']:0{width}d}"

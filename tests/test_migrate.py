@@ -104,10 +104,11 @@ def test_migrate_does_not_modify_source(src_db, dst_conn):
 
 def test_sha256_and_name_key_match_014_semantics():
     import hashlib
-    assert migrate.sha256_bytes(b"hello") == hashlib.sha256(b"hello").hexdigest()
-    assert migrate.norm_text("a   b\n c") == "a b c"
-    assert migrate.name_key("连杆固定方案 (副本).docx") == "连杆固定方案"
-    assert migrate.name_key("方案V2.docx") == "方案"
+    from docarchive import fingerprint
+    assert fingerprint.sha256_bytes(b"hello") == hashlib.sha256(b"hello").hexdigest()
+    assert fingerprint.norm_text("a   b\n c") == "a b c"
+    assert fingerprint.name_key("连杆固定方案 (副本).docx") == "连杆固定方案"
+    assert fingerprint.name_key("方案V2.docx") == "方案"
 
 
 def test_verify_fingerprints_resolves_relative_path(tmp_path):
@@ -143,7 +144,6 @@ def test_verify_fingerprints_resolves_relative_path(tmp_path):
     conn.commit()
     conn.close()
 
-    dst = sqlite3.connect(":memory:")
-    diffs = migrate.verify_fingerprints(src, dst, archive_root=tmp_path)
+    diffs = migrate.verify_fingerprints(src, archive_root=tmp_path)
     # 哈希一致 → 无差异
     assert diffs == []

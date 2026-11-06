@@ -5,37 +5,10 @@
 """
 from __future__ import annotations
 
-import hashlib
-import re
 import sqlite3
 from pathlib import Path
 
-# 与 014 tools/track.py 保持一致的指纹算法
-TEXT_EXTS = {".docx", ".doc"}
-ANYDOC_EXTS = {".pdf", ".xlsx", ".xls", ".pptx", ".ppt"}
-PLAIN_EXTS = {".txt", ".md"}
-
-
-def sha256_stream(f) -> str:
-    h = hashlib.sha256()
-    for chunk in iter(lambda: f.read(1 << 20), b""):
-        h.update(chunk)
-    return h.hexdigest()
-
-
-def norm_text(t: str) -> str:
-    return re.sub(r"\s+", " ", t).strip()
-
-
-def name_key(name: str) -> str:
-    stem = Path(name).stem.lower()
-    stem = re.sub(r"[\s\-_()（）\[\]【】]+", "", stem)
-    stem = re.sub(r"(副本|最终版|终稿|定稿|v\d+|rev\d*)$", "", stem)
-    return stem or Path(name).stem.lower()
-
-
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+from docarchive import fingerprint
 
 
 def migrate(src_db: Path, dst_conn: sqlite3.Connection) -> dict:
@@ -146,7 +119,7 @@ def migrate(src_db: Path, dst_conn: sqlite3.Connection) -> dict:
     return stats
 
 
-def verify_fingerprints(src_db: Path, dst_conn: sqlite3.Connection, archive_root: Path | None = None) -> list[dict]:
+def verify_fingerprints(src_db: Path, archive_root: Path | None = None) -> list[dict]:
     """复算 014 每条出现归档文件的 byte_hash/text_fp，与库中记录对比。
 
     返回差异清单：每项 {occurrence_id, field, stored, recomputed, path}。
@@ -177,7 +150,7 @@ def verify_fingerprints(src_db: Path, dst_conn: sqlite3.Connection, archive_root
             continue
         # byte_hash 复算
         with open(p, "rb") as f:
-            bh = sha256_stream(f)
+            bh = fingerprint.sha256_stream(f)
         if r["byte_hash"] and bh != r["byte_hash"]:
             diffs.append({
                 "occurrence_id": r["id"], "field": "byte_hash",
@@ -185,7 +158,7 @@ def verify_fingerprints(src_db: Path, dst_conn: sqlite3.Connection, archive_root
             })
         # text_fp 复算（只对支持格式）
         ext = p.suffix.lower()
-        tfp = compute_text_fp(p, ext)
+        tfp = fingerprint.compute_text_fp(p, ext)
         if r["text_fp"] and tfp is not None and tfp != r["text_fp"]:
             diffs.append({
                 "occurrence_id": r["id"], "field": "text_fp",
@@ -193,52 +166,3 @@ def verify_fingerprints(src_db: Path, dst_conn: sqlite3.Connection, archive_root
             })
     src.close()
     return diffs
-
-
-def compute_text_fp(path: Path, ext: str) -> str | None:
-    """复算正文指纹（与 014 text_fingerprint 一致的逻辑，只读文件）。"""
-    try:
-        if ext in PLAIN_EXTS:
-            raw = path.read_bytes()
-            return hashlib.sha256(norm_text(raw.decode("utf-8", "ignore")).encode()).hexdigest()
-        if ext in TEXT_EXTS:
-            import subprocess
-            r = subprocess.run(
-                ["textutil", "-convert", "txt", "-stdout", str(path)],
-                capture_output=True, timeout=60,
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                return hashlib.sha256(
-                    norm_text(r.stdout.decode("utf-8", "ignore")).encode()
-                ).hexdigest()
-        if ext in ANYDOC_EXTS:
-            import anydoc
-            md = anydoc.to_markdown(str(path))
-            if md and md.strip():
-                return hashlib.sha256(norm_text(md).encode()).hexdigest()
-    except Exception:
-        pass
-    return None
-
-
-def compute_text_fp_from_bytes(data: bytes, ext: str) -> str | None:
-    """从 bytes 复算正文指纹（zip 内文件用，避免落临时文件）。"""
-    try:
-        if ext in PLAIN_EXTS:
-            return hashlib.sha256(
-                norm_text(data.decode("utf-8", "ignore")).encode()
-            ).hexdigest()
-        # 文本型（docx/pdf 等）需要落盘给 textutil/anydoc，走临时文件
-        if ext in TEXT_EXTS or ext in ANYDOC_EXTS:
-            import tempfile
-            import os
-            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tf:
-                tf.write(data)
-                tmp = tf.name
-            try:
-                return compute_text_fp(Path(tmp), ext)
-            finally:
-                os.unlink(tmp)
-    except Exception:
-        pass
-    return None

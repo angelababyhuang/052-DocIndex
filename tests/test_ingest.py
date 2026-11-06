@@ -86,16 +86,30 @@ def test_suggestion_still_detects_real_duplicate(conn):
                              exclude_id=rows[1]["id"]) == "duplicate_byte"
 
 
+def test_suggestion_ignores_merged_and_ignored(conn):
+    """merged/ignored 出现已被人工判过，不该作为新文件的去重基准。
+
+    这是 code review 抓出的 bug：suggestion 未按 status 过滤，
+    会把已 ignored/merged 的出现当作「疑似重复」依据。
+    """
+    # 一条已 ignored 的出现，byte_hash = bh_OLD
+    ingest.register(conn, "wechat", "p1", None, "旧文件.docx", 10, "bh_OLD", None)
+    conn.execute("UPDATE occurrences SET status='ignored' WHERE byte_hash='bh_OLD'")
+    conn.commit()
+    # 新文件恰好字节相同（bh_OLD），但旧的那条已 ignored → 不该判 duplicate
+    assert ingest.suggestion(conn, "bh_OLD", None, "新文件.docx") == "new"
+
+
 def test_wechat_1_suffix_is_not_a_version_signal(conn):
     """微信 (1) 后缀是同名避让，不是第二份副本、也不是新版本信号。
 
     name_key 应把「方案.docx」和「方案(1).docx」归一化成不同名（方案 vs 方案1），
     所以 (1) 不会被误判为同名新版本；而「(副本)」才会归一化成同名。
     """
-    from docarchive import migrate
-    assert migrate.name_key("方案.docx") == "方案"
-    assert migrate.name_key("方案(1).docx") == "方案1"  # (1) 不同名
-    assert migrate.name_key("方案(副本).docx") == "方案"  # (副本) 同名
+    from docarchive import fingerprint
+    assert fingerprint.name_key("方案.docx") == "方案"
+    assert fingerprint.name_key("方案(1).docx") == "方案1"  # (1) 不同名
+    assert fingerprint.name_key("方案(副本).docx") == "方案"  # (副本) 同名
 
     # (1) 后缀的文件：内容不同 → 不是重复（byte_hash 不同），也不该被 name_key 判成新版本
     ingest.register(conn, "wechat", "p1", None, "方案.docx", 100, "bh_A", "fp_A")

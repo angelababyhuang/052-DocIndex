@@ -1,14 +1,17 @@
 """摄入与去重：扫描目录登记出现，三层指纹去重给建议。"""
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 import zipfile
 from pathlib import Path
 
-from docarchive import migrate
+from docarchive import fingerprint
 
 SKIP_NAMES = {".DS_Store"}
+
+# 去重建议里只参考「会进库」的出现：pending/archived 是有效去重基准，
+# merged/ignored 已被人工判过（分别是重复、忽略），不该再作为新文件的重复依据。
+_DEDUP_STATUSES = ("pending", "archived")
 
 
 def register(conn: sqlite3.Connection, source_type: str, source_path: str,
@@ -30,6 +33,18 @@ def register(conn: sqlite3.Connection, source_type: str, source_path: str,
     return True
 
 
+def _exists(conn: sqlite3.Connection, column: str, value: str,
+            exclude_id: int | None) -> bool:
+    """去重基准里是否有其他出现（排除 exclude_id）在该列命中 value。"""
+    q = f"SELECT 1 FROM occurrences WHERE {column}=? AND status IN ('pending','archived') "
+    params = [value]
+    if exclude_id is not None:
+        q += "AND id != ?"
+        params.append(exclude_id)
+    q += " LIMIT 1"
+    return conn.execute(q, params).fetchone() is not None
+
+
 def suggestion(conn: sqlite3.Connection, byte_hash: str | None,
                text_fp: str | None, file_name: str,
                exclude_id: int | None = None) -> str:
@@ -41,42 +56,29 @@ def suggestion(conn: sqlite3.Connection, byte_hash: str | None,
       - 'new_version'：名称归一化相似但指纹不同
       - 'new'：疑似新文档
 
-    exclude_id：排除当前这条出现自身，避免自匹配误报（默认 None 不过滤，
-    但扫描时传自身 id）。
+    exclude_id：排除当前这条出现自身，避免自匹配误报。
+    只参考 pending/archived 状态的出现（merged/ignored 已被人工判过，不算基准）。
     """
-    if byte_hash:
-        q = "SELECT id FROM occurrences WHERE byte_hash=? "
-        params = [byte_hash]
-        if exclude_id is not None:
-            q += "AND id != ?"
-            params.append(exclude_id)
-        q += " LIMIT 1"
-        if conn.execute(q, params).fetchone():
-            return "duplicate_byte"
-    if text_fp:
-        q = "SELECT id FROM occurrences WHERE text_fp=? "
-        params = [text_fp]
-        if exclude_id is not None:
-            q += "AND id != ?"
-            params.append(exclude_id)
-        q += " LIMIT 1"
-        if conn.execute(q, params).fetchone():
-            return "duplicate_content"
-    key = migrate.name_key(file_name)
+    if byte_hash and _exists(conn, "byte_hash", byte_hash, exclude_id):
+        return "duplicate_byte"
+    if text_fp and _exists(conn, "text_fp", text_fp, exclude_id):
+        return "duplicate_content"
+    key = fingerprint.name_key(file_name)
     if key:
-        for row in conn.execute(
-            "SELECT id, file_name FROM occurrences WHERE id != ?" if exclude_id is not None
-            else "SELECT id, file_name FROM occurrences",
-            [exclude_id] if exclude_id is not None else [],
-        ):
-            if migrate.name_key(row["file_name"]) == key:
+        q = "SELECT id, file_name FROM occurrences WHERE status IN ('pending','archived') "
+        params = []
+        if exclude_id is not None:
+            q += "AND id != ?"
+            params.append(exclude_id)
+        for row in conn.execute(q, params):
+            if fingerprint.name_key(row["file_name"]) == key:
                 return "new_version"
     return "new"
 
 
 def scan_dir(conn: sqlite3.Connection, src: Path, source_type: str = "wechat",
              since: str | None = None) -> int:
-    """扫描目录登记出现（不含 zip 展开）。返回新登记数。"""
+    """扫描目录登记出现（含 zip 展开）。返回新登记数。"""
     if not src.is_dir():
         raise FileNotFoundError(f"目录不存在: {src}")
     n = 0
@@ -86,19 +88,14 @@ def scan_dir(conn: sqlite3.Connection, src: Path, source_type: str = "wechat",
         rel = p.relative_to(src).parts
         if not rel:
             continue
-        if since is not None:
-            try:
-                from datetime import datetime
-                if datetime.strptime(rel[0], "%Y-%m-%d").strftime("%Y-%m-%d") < since:
-                    continue
-            except ValueError:
-                continue
+        if since is not None and rel[0] < since:
+            continue
         if p.suffix.lower() == ".zip":
             n += _register_zip_entries(conn, p)
         else:
             with p.open("rb") as f:
-                bh = migrate.sha256_stream(f)
-            fp = migrate.compute_text_fp(p, p.suffix.lower())
+                bh = fingerprint.sha256_stream(f)
+            fp = fingerprint.compute_text_fp(p, p.suffix.lower())
             if register(conn, source_type, str(p), None, p.name, p.stat().st_size, bh, fp):
                 n += 1
     conn.commit()
@@ -115,11 +112,11 @@ def _register_zip_entries(conn: sqlite3.Connection, zp: Path) -> int:
             name = Path(zip_display_name(info)).name
             if name in SKIP_NAMES or name.startswith("."):
                 continue
-            with zf.open(info) as f:
-                bh = migrate.sha256_stream(f)
+            # 读一次，同时算 byte_hash 和 text_fp
             raw = zf.read(info)
+            bh = fingerprint.sha256_bytes(raw)
             ext = Path(name).suffix.lower()
-            fp = migrate.compute_text_fp_from_bytes(raw, ext)
+            fp = fingerprint.compute_text_fp_from_bytes(raw, ext)
             if register(conn, "zip", str(zp), info.filename, name, info.file_size, bh, fp):
                 n += 1
     return n

@@ -15,7 +15,7 @@ def cmd_migrate(args):
     stats = migrate.migrate(args.src_db, conn)
     print("迁移完成:", stats)
     if args.verify:
-        diffs = migrate.verify_fingerprints(args.src_db, conn)
+        diffs = migrate.verify_fingerprints(args.src_db)
         print(f"指纹复算差异: {len(diffs)} 条")
         for d in diffs:
             print(f"  occ#{d['occurrence_id']} [{d['field']}] {d['path']}")
