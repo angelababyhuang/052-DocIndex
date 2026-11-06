@@ -20,3 +20,6 @@ out/
 
 # 系统
 .DS_Store
+
+# 多票并行时的 git worktree（不提交）
+.worktrees/
