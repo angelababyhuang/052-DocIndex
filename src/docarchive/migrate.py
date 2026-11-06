@@ -219,3 +219,26 @@ def compute_text_fp(path: Path, ext: str) -> str | None:
     except Exception:
         pass
     return None
+
+
+def compute_text_fp_from_bytes(data: bytes, ext: str) -> str | None:
+    """从 bytes 复算正文指纹（zip 内文件用，避免落临时文件）。"""
+    try:
+        if ext in PLAIN_EXTS:
+            return hashlib.sha256(
+                norm_text(data.decode("utf-8", "ignore")).encode()
+            ).hexdigest()
+        # 文本型（docx/pdf 等）需要落盘给 textutil/anydoc，走临时文件
+        if ext in TEXT_EXTS or ext in ANYDOC_EXTS:
+            import tempfile
+            import os
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tf:
+                tf.write(data)
+                tmp = tf.name
+            try:
+                return compute_text_fp(Path(tmp), ext)
+            finally:
+                os.unlink(tmp)
+    except Exception:
+        pass
+    return None
