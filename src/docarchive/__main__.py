@@ -4,6 +4,7 @@
 """
 import argparse
 import contextlib
+import sqlite3
 from pathlib import Path
 
 from docarchive import (
@@ -15,6 +16,7 @@ from docarchive import (
     ingest,
     media,
     migrate,
+    search,
     weknora,
 )
 from docarchive.env import merged
@@ -43,6 +45,16 @@ def _add_db_option(parser):
 
 def _archive_dir(db_path: Path) -> Path:
     return db_path.parent / "archive"
+
+
+def _open_truth_readonly(db_path: Path):
+    """只读打开真相源；文件不存在返回 None（搜索不该凭空建库）。"""
+    if not Path(db_path).is_file():
+        return None
+    try:
+        return db.connect_readonly(db_path)
+    except sqlite3.Error:  # 库损坏/无权限：降级成纯文本检索
+        return None
 
 
 def _captioner(args):
@@ -216,7 +228,8 @@ def cmd_index(args):
         plan = index.plan_units(units)
         print(f"（dry-run）将推送 {plan.units} 条知识，标签 {len(plan.tags)} 个：")
         for u in units:
-            print(f"  {u.kind:<8} {u.key:<12} {u.title}")
+            imgs = f"  图片 {len(u.images)}" if u.images else ""
+            print(f"  {u.kind:<8} {u.key:<12} {u.title}{imgs}")
         for t in plan.tags:
             print(f"  标签 {t}")
         return
@@ -234,6 +247,8 @@ def cmd_index(args):
         raise SystemExit(str(e))
     print(f"推送 {report.units} 条知识 → 知识库「{args.kb_name}」({report.kb_id})，"
           f"标签 {len(report.tags)} 个")
+    for w in report.metadata_warnings:
+        print(f"  ⚠ 图片清单写入失败：{w}")
     if args.wait and report.knowledge_ids:
         print("等 WeKnora 解析…")
         try:
@@ -261,13 +276,35 @@ def cmd_search(args):
     if not hits:
         print("没搜到（索引可能还没解析完，或关键词不合适）")
         return
-    print(f"命中 {len(hits)} 条：")
-    for h in hits:
-        title = h.get("knowledge_title") or h.get("title") or "-"
-        score = h.get("score")
-        score_s = f"{score:.3f}" if isinstance(score, (int, float)) else "-"
-        snippet = " ".join((h.get("content") or "").split())[:160]
-        print(f"  [{score_s}] {title}：{snippet}")
+    conn = _open_truth_readonly(args.db)
+    try:
+        images = [search.hit_image_codes(h) for h in hits]
+        if conn is None and any(i.chunk or i.knowledge for i in images):
+            print(f"（未找到真相源 {args.db}，只显示 IMG 编号、不解析母本）")
+        print(f"命中 {len(hits)} 条：")
+        for h, imgs in zip(hits, images):
+            title = h.get("knowledge_title") or h.get("title") or "-"
+            score = h.get("score")
+            score_s = f"{score:.3f}" if isinstance(score, (int, float)) else "-"
+            snippet = " ".join((h.get("content") or "").split())[:160]
+            print(f"  [{score_s}] {title}：{snippet}")
+            _print_hit_images(conn, _archive_dir(args.db), imgs)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _print_hit_images(conn, archive_dir: Path, imgs: search.HitImages) -> None:
+    """每条命中下打印图片母本位置；解析不到也打印编号+原因（文本命中不受影响）。"""
+    for code in imgs.chunk:
+        print("    " + _format_image(media.resolve_image(conn, archive_dir, code), "图片"))
+    for code in imgs.extra():
+        print("    " + _format_image(media.resolve_image(conn, archive_dir, code), "文档图片"))
+
+
+def _format_image(ref: media.ImageLocation, label: str) -> str:
+    detail = ref.location or f"（{ref.problem}）"
+    return f"{label} {ref.code}  {detail}"
 
 
 # ---------------- 参数 ----------------
@@ -371,6 +408,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("search", help="在 WeKnora 里做内容检索")
     p.add_argument("query", help="关键词或自然语言")
+    _add_db_option(p)
     p.add_argument("--kb-name", default=DEFAULT_KB_NAME, help="WeKnora 知识库名")
     p.add_argument("--tag", action="append",
                    help="按标签过滤（可重复；写 项目/浮标项目 或只写 浮标项目）")

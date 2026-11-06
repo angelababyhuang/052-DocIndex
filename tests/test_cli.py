@@ -181,7 +181,7 @@ def test_cli_scan_no_caption_skips_model(tmp_path, monkeypatch, capsys, db_path)
 
 # ---------- #15：index / search ----------
 
-def _seed_converted_doc(db_path, archive_dir):
+def _seed_converted_doc(db_path, archive_dir, md_text=None):
     from docarchive import db as appdb
 
     conn = appdb.connect(db_path)
@@ -192,7 +192,7 @@ def _seed_converted_doc(db_path, archive_dir):
     )
     md = archive_dir / "doc-1" / "v1-a.md"
     md.parent.mkdir(parents=True, exist_ok=True)
-    md.write_text("# 连杆方案\n\n连杆间隙复测 0.02mm。", encoding="utf-8")
+    md.write_text(md_text or "# 连杆方案\n\n连杆间隙复测 0.02mm。", encoding="utf-8")
     conn.execute(
         "INSERT INTO versions(document_id, archive_path, markdown_path) "
         "VALUES (1, 'doc-1/v1-a.docx', 'doc-1/v1-a.md')"
@@ -253,3 +253,140 @@ def test_cli_search_tag_accepts_bare_project_name(tmp_path, monkeypatch, capsys,
     monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
     run_cli(monkeypatch, "search", "连杆间隙", "--tag", "浮标项目")
     assert fake.tag_names == ["项目/浮标项目"]
+
+
+# ---------- #21：检索结果回指内嵌图 ----------
+
+def _seed_image(db_path, archive_dir, data=b"fake-png-bytes"):
+    from docarchive import db as appdb
+    from docarchive import imagelib
+
+    conn = appdb.connect(db_path)
+    reg = imagelib.register_image(conn, archive_dir, data, ext=".png")
+    conn.commit()
+    conn.close()
+    return reg.code
+
+
+class _ImageHitWeKnora(_FakeWeKnora):
+    def __init__(self, hit):
+        super().__init__()
+        self.hit = hit
+
+    def search(self, query, kb_ids, tag_ids=(), match_count=5):
+        return [self.hit]
+
+
+def test_cli_search_prints_image_master_path(tmp_path, monkeypatch, capsys, db_path):
+    archive_dir = db_path.parent / "archive"
+    _seed_converted_doc(db_path, archive_dir)
+    code = _seed_image(db_path, archive_dir)
+    fake = _ImageHitWeKnora({
+        "knowledge_title": "连杆方案", "score": 0.9,
+        "content": f"见 {{{{{code}}}}}",
+        "knowledge_custom_metadata": f"图片: {code}",
+    })
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+
+    run_cli(monkeypatch, "search", "连杆间隙", "--db", str(db_path))
+
+    out = capsys.readouterr().out
+    assert code in out
+    assert str((archive_dir / f"images/{code}.png").resolve()) in out
+
+
+def test_cli_search_prints_manifest_only_images(tmp_path, monkeypatch, capsys, db_path):
+    """分块正文没带标记时，靠知识条目的图片清单补文档级图片（标成「文档图片」）。"""
+    archive_dir = db_path.parent / "archive"
+    _seed_converted_doc(db_path, archive_dir)
+    code = _seed_image(db_path, archive_dir)
+    fake = _ImageHitWeKnora({
+        "knowledge_title": "连杆方案", "score": 0.9,
+        "content": "这一段没有图片标记",
+        "knowledge_custom_metadata": f"图片: {code}",
+    })
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+
+    run_cli(monkeypatch, "search", "连杆间隙", "--db", str(db_path))
+
+    out = capsys.readouterr().out
+    assert f"文档图片 {code}" in out
+    assert str((archive_dir / f"images/{code}.png").resolve()) in out
+
+
+def test_cli_search_degrades_when_master_missing(tmp_path, monkeypatch, capsys, db_path):
+    archive_dir = db_path.parent / "archive"
+    _seed_converted_doc(db_path, archive_dir)
+    code = _seed_image(db_path, archive_dir)
+    (archive_dir / f"images/{code}.png").unlink()
+    fake = _ImageHitWeKnora({
+        "knowledge_title": "连杆方案", "score": 0.9,
+        "content": f"见 {{{{{code}}}}}",
+    })
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+
+    run_cli(monkeypatch, "search", "连杆间隙", "--db", str(db_path))
+
+    out = capsys.readouterr().out
+    assert "母本缺失" in out and code in out
+    assert "连杆方案" in out  # 文本命中照常打印
+
+
+def test_cli_search_without_truth_source_still_prints_hits(tmp_path, monkeypatch, capsys, db_path):
+    fake = _ImageHitWeKnora({
+        "knowledge_title": "连杆方案", "score": 0.9,
+        "content": "见 {{IMG-0001}}",
+        "knowledge_custom_metadata": "图片: IMG-0001",
+    })
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+    missing = tmp_path / "nope" / "truth.db"
+
+    run_cli(monkeypatch, "search", "连杆间隙", "--db", str(missing))
+
+    out = capsys.readouterr().out
+    assert "连杆方案" in out and "IMG-0001" in out
+    assert "真相源" in out
+    assert not missing.exists()  # 搜索不该凭空建库
+
+
+def test_cli_index_reports_manifest_write_failure(tmp_path, monkeypatch, capsys, db_path):
+    archive_dir = db_path.parent / "archive"
+    _seed_converted_doc(db_path, archive_dir,
+                        md_text="# 连杆方案\n\n{{IMG-0001}} 间隙 0.02mm。")
+
+    class _IndexFake(_FakeWeKnora):
+        def embedding_model_id(self, preferred=None):
+            return "emb-1"
+
+        def find_kb(self, name):
+            return None
+
+        def create_kb(self, name, embedding_model_id=None):
+            return "kb-1"
+
+        def delete_kb(self, kb_id):
+            pass
+
+        def ensure_tag(self, kb_id, name):
+            return f"t-{name}"
+
+        def create_knowledge(self, kb_id, title, content, tag_ids=()):
+            return "k-1"
+
+        def set_knowledge_metadata(self, knowledge_id, metadata):
+            raise RuntimeError("WeKnora 500")
+
+    monkeypatch.setattr(cli, "_weknora_client", lambda: _IndexFake())
+    run_cli(monkeypatch, "index", "--db", str(db_path))
+    out = capsys.readouterr().out
+    assert "图片清单写入失败" in out and "WeKnora 500" in out
+    assert "推送 1 条知识" in out  # 清单失败不挡入库
+
+
+def test_cli_index_dry_run_shows_document_image_count(tmp_path, monkeypatch, capsys, db_path):
+    archive_dir = db_path.parent / "archive"
+    _seed_converted_doc(db_path, archive_dir,
+                        md_text="# 连杆方案\n\n{{IMG-0001}} 与 {{IMG-0002}}。")
+    run_cli(monkeypatch, "index", "--dry-run", "--db", str(db_path))
+    out = capsys.readouterr().out
+    assert "图片 2" in out

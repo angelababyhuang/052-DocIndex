@@ -35,6 +35,44 @@ def is_media(path: str | Path) -> bool:
 
 
 @dataclass(frozen=True)
+class ImageLocation:
+    """一个 IMG 编号对应的母本位置；解析不到时 location 为空、problem 说明原因。"""
+
+    code: str
+    location: str | None = None   # 本地绝对路径或远程 URL
+    problem: str | None = None    # 未登记 / 母本缺失 / 真相源不可用
+
+
+def resolve_image(conn: sqlite3.Connection | None, archive_dir: str | Path,
+                  code: str) -> ImageLocation:
+    """从 `IMG-####` 查图片母本（真相源 `images.path`，相对受管目录）。
+
+    检索回指用（#21）：任何一步取不到都只回执原因，不抛异常——图不可用不能把
+    文本检索结果一起挡掉。`conn=None` 表示真相源没打开（搜索不该凭空建库）。
+    """
+    if conn is None:
+        return ImageLocation(code, problem="真相源不可用")
+    try:
+        row = conn.execute("SELECT path FROM images WHERE code=?", (code,)).fetchone()
+    except sqlite3.Error as e:  # 库损坏/表缺失：图回指降级，不影响文本命中
+        return ImageLocation(code, problem=f"真相源不可用：{type(e).__name__}")
+    if row is None:
+        return ImageLocation(code, problem="未登记")
+    rel = (row[0] or "").strip()  # 只有一列，用下标兼容未设 row_factory 的连接
+    if not rel:
+        return ImageLocation(code, problem="未登记母本路径")
+    if "://" in rel:  # COS / 对象存储：原样给 URL
+        return ImageLocation(code, location=rel)
+    path = Path(rel)
+    if not path.is_absolute():
+        path = Path(archive_dir) / rel
+    path = path.resolve()
+    if not path.is_file():
+        return ImageLocation(code, problem=f"母本缺失：{path}")
+    return ImageLocation(code, location=str(path))
+
+
+@dataclass(frozen=True)
 class ImageReceipt:
     """独立图登记回执（caption_error 非空表示图进了库但描述没生成）。"""
 

@@ -357,3 +357,71 @@ def test_standalone_caption_runs_outside_write_transaction(conn, archive_dir, tm
     media.register_standalone_image(conn, archive_dir, make_png(tmp_path / "x.png"),
                                     captioner=Probe())
     assert seen == [False]
+
+
+# ---------- #21：从 IMG 编号解析图片母本 ----------
+
+def _register_fake_image(conn, archive_dir, data=b"fake-png-bytes"):
+    from docarchive import imagelib
+
+    reg = imagelib.register_image(conn, archive_dir, data, ext=".png")
+    conn.commit()
+    return reg
+
+
+def test_resolve_image_returns_absolute_master_path(conn, archive_dir):
+    reg = _register_fake_image(conn, archive_dir)
+    ref = media.resolve_image(conn, archive_dir, reg.code)
+    assert ref.code == reg.code
+    assert ref.problem is None
+    assert ref.location == str((archive_dir / f"images/{reg.code}.png").resolve())
+
+
+def test_resolve_image_reports_missing_master(conn, archive_dir):
+    reg = _register_fake_image(conn, archive_dir)
+    (archive_dir / f"images/{reg.code}.png").unlink()
+    ref = media.resolve_image(conn, archive_dir, reg.code)
+    assert ref.location is None
+    assert "母本缺失" in ref.problem and reg.code in ref.problem
+
+
+def test_resolve_image_reports_unregistered_code(conn, archive_dir):
+    ref = media.resolve_image(conn, archive_dir, "IMG-9999")
+    assert ref.location is None
+    assert "未登记" in ref.problem
+
+
+def test_resolve_image_reports_missing_truth_source(archive_dir):
+    ref = media.resolve_image(None, archive_dir, "IMG-0001")
+    assert ref.location is None
+    assert "真相源不可用" in ref.problem
+
+
+def test_resolve_image_passes_remote_path_through(conn, archive_dir):
+    reg = _register_fake_image(conn, archive_dir)
+    conn.execute("UPDATE images SET path=? WHERE code=?",
+                 ("https://cos.example.com/IMG-0001.png", reg.code))
+    conn.commit()
+    ref = media.resolve_image(conn, archive_dir, reg.code)
+    assert ref.location == "https://cos.example.com/IMG-0001.png"
+
+
+def test_resolve_image_reports_empty_path(conn, archive_dir):
+    reg = _register_fake_image(conn, archive_dir)
+    conn.execute("UPDATE images SET path=NULL WHERE code=?", (reg.code,))
+    conn.commit()
+    ref = media.resolve_image(conn, archive_dir, reg.code)
+    assert ref.location is None
+    assert "母本路径" in ref.problem
+
+
+def test_resolve_image_degrades_on_broken_truth_source(tmp_path):
+    import sqlite3
+
+    plain = sqlite3.connect(tmp_path / "empty.db")  # 没有 images 表
+    try:
+        ref = media.resolve_image(plain, tmp_path, "IMG-0001")
+    finally:
+        plain.close()
+    assert ref.location is None
+    assert "真相源不可用" in ref.problem

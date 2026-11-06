@@ -9,14 +9,17 @@ WeKnora 里的知识库、标签、分块、向量全是**派生**的：删了�
    我们在外面先切碎只会破坏它的检索上下文。
 2. **标签四维**（项目/类别/图片/视频）编码在标签名里：`项目/浮标项目`、
    `类别/测试`、`图片`、`视频`。WeKnora 的标签是平的，维度靠命名约定表达。
+3. **内嵌图另带一份图片清单**：文档条目把正文里的 `{{IMG-####}}` 抽出来写进
+   knowledge 的 `custom_metadata.图片`，让检索命中能回到图片母本（见 docs/adr/0005）。
 """
 from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Protocol
+from typing import Iterable, Mapping, Protocol
 
+from docarchive import imagelib
 from docarchive.archive import CATEGORIES
 
 # 标签维度前缀
@@ -24,6 +27,13 @@ TAG_PROJECT = "项目"
 TAG_CATEGORY = "类别"
 TAG_IMAGE = "图片"
 TAG_VIDEO = "视频"
+
+# 知识条目「图片清单」：写进 WeKnora knowledge 的 custom_metadata（#21）。
+# 检索结果里以拍平文本 `图片: IMG-0001,IMG-0002` 返回（weknora-api.md 有实测记录）。
+IMAGE_MANIFEST_KEY = "图片"
+IMAGE_COUNT_KEY = "图片数"
+# WeKnora 校验：custom_metadata 的值 ≤1000 字符（超了整条写入 500）
+MAX_MANIFEST_CHARS = 1000
 
 
 @dataclass(frozen=True)
@@ -35,6 +45,8 @@ class Unit:
     title: str
     content: str
     tags: tuple[str, ...]
+    # 正文里引用的图片编号（文档条目才有）；空元组 = 这条知识没有内嵌图
+    images: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -43,6 +55,8 @@ class IndexReport:
     units: int
     tags: tuple[str, ...] = ()
     knowledge_ids: tuple[str, ...] = ()
+    # 图片清单写失败不挡入库（图回指降级，文本索引照常）：逐条记原因
+    metadata_warnings: tuple[str, ...] = ()
 
 
 class IndexExistsError(RuntimeError):
@@ -62,6 +76,9 @@ class IndexClient(Protocol):
 
     def create_knowledge(self, kb_id: str, title: str, content: str,
                          tag_ids: Iterable[str] = ()) -> str: ...
+
+    def set_knowledge_metadata(self, knowledge_id: str,
+                               metadata: Mapping[str, object]) -> None: ...
 
 
 class SearchClient(Protocol):
@@ -106,6 +123,47 @@ def planned_tags(units: Iterable[Unit]) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def manifest_fields(codes: Iterable[str]) -> dict[str, object]:
+    """把正文里的 IMG 编号拼成 custom_metadata 字段（空清单返回 {}，不写）。
+
+    值超长就截断并带 `图片数`：WeKnora 对值有 1000 字符上限，超了整个 PUT 会 500。
+    截断只影响「文档级清单」，chunk 正文里的标记不受影响。
+    """
+    codes = list(dict.fromkeys(codes))
+    if not codes:
+        return {}
+    kept: list[str] = []
+    length = 0
+    for code in codes:
+        extra = len(code) + (1 if kept else 0)
+        if length + extra > MAX_MANIFEST_CHARS:
+            break
+        kept.append(code)
+        length += extra
+    fields: dict[str, object] = {IMAGE_MANIFEST_KEY: ",".join(kept)}
+    if len(kept) < len(codes):
+        fields[IMAGE_COUNT_KEY] = len(codes)
+    return fields
+
+
+def manifest_codes(value: object) -> tuple[str, ...]:
+    """从检索结果的知识条目元数据里取图片清单（兼容拍平文本与 JSON 对象）。
+
+    WeKnora 的 `knowledge_custom_metadata` 实测是 `键: 值` 文本、多字段换行；
+    对象形状是防御性的（接口将来变结构化时不用改调用点）。
+    """
+    if isinstance(value, Mapping):
+        raw = value.get(IMAGE_MANIFEST_KEY)
+        return imagelib.codes_in(raw) if isinstance(raw, str) else ()
+    if not isinstance(value, str):
+        return ()
+    for line in value.splitlines():
+        key, sep, rest = line.partition(":")
+        if sep and key.strip() == IMAGE_MANIFEST_KEY:
+            return imagelib.codes_in(rest)
+    return ()
+
+
 def index_units(units: Iterable[Unit], client: IndexClient, *, kb_name: str,
                 embedding_model_id: str | None = None,
                 rebuild: bool = False) -> IndexReport:
@@ -127,13 +185,22 @@ def index_units(units: Iterable[Unit], client: IndexClient, *, kb_name: str,
         kb_id = client.create_kb(kb_name, embedding_model_id)
 
     tag_ids = {name: client.ensure_tag(kb_id, name) for name in planned_tags(units)}
-    kids = [
-        client.create_knowledge(kb_id, unit.title, unit.content,
-                                [tag_ids[t] for t in unit.tags])
-        for unit in units
-    ]
+    kids: list[str] = []
+    warnings: list[str] = []
+    for unit in units:
+        kid = client.create_knowledge(kb_id, unit.title, unit.content,
+                                      [tag_ids[t] for t in unit.tags])
+        kids.append(kid)
+        fields = manifest_fields(unit.images)
+        if not fields:
+            continue
+        try:
+            client.set_knowledge_metadata(kid, fields)
+        except Exception as e:  # 降级：图回指没了，但条目已经进索引
+            warnings.append(f"{unit.title}（{unit.key}）：{type(e).__name__}: {e}")
     return IndexReport(kb_id=kb_id, units=len(units), tags=tuple(tag_ids),
-                       knowledge_ids=tuple(kids))
+                       knowledge_ids=tuple(kids),
+                       metadata_warnings=tuple(warnings))
 
 
 # ---------------- 真相源 → 条目 ----------------
@@ -183,7 +250,7 @@ def _document_units(conn: sqlite3.Connection, archive_dir: Path) -> list[Unit]:
         if r["category"]:
             tags.append(f"{TAG_CATEGORY}/{r['category']}")
         units.append(Unit("document", f"doc-{r['id']}", r["title"], content,
-                          tuple(tags)))
+                          tuple(tags), imagelib.ref_codes(content)))
     return units
 
 

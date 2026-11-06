@@ -34,15 +34,47 @@
 | 列模型 | `GET /api/v1/models` | `id`、`name`、`type`（**首字母大写**：`Embedding` / `Rerank` / `VLLM` / `KnowledgeQA`） |
 | 找/建/删知识库 | `GET/POST /api/v1/knowledge-bases`、`DELETE /api/v1/knowledge-bases/:id` | 建库 body：`name`、`type: document`、`embedding_model_id`；返回 `data.id` |
 | 列/建标签 | `GET/POST /api/v1/knowledge-bases/:id/tags` | 建标签 body 只有 `{name}`（可选 color/sort_order）；**标签是平的，没有维度字段**，四维靠命名（`项目/<名>`、`类别/<名>`、`图片`、`视频`） |
-| 推 markdown | `POST /api/v1/knowledge-bases/:id/knowledge/manual` | body `{title, content, status: "publish", tag_ids: []}`；返回 `data.id` |
+| 推 markdown | `POST /api/v1/knowledge-bases/:id/knowledge/manual` | body `{title, content, status: "publish", tag_ids: []}`；返回 `data.id`（**没有 metadata 字段**） |
+| 写知识元数据 | `PUT /api/v1/knowledge/:id` | body `{custom_metadata: {...}}`；整体覆盖，见下节 |
+| 读分块 | `GET /api/v1/chunks/:knowledge_id?page=1&page_size=100` | `data` 是数组，含 `content`、`start_at`、`end_at`、`chunk_index`、`image_info` |
 | 查解析状态 | `GET /api/v1/knowledge/:id` | `data.parse_status` ∈ `pending/processing/completed/failed`；**不要**用 `/knowledge-bases/:kb/knowledge/:kid`（404） |
 | 检索 | `POST /api/v1/knowledge-search` | body `{query, knowledge_base_ids, tag_ids, match_count}`；返回项含 `content`、`score`、`knowledge_id`、`knowledge_title` |
+
+## knowledge 的 custom_metadata（#21 实测）
+
+`manual` 接口没有 metadata 字段，只能建完知识后单独写：
+
+```
+PUT /api/v1/knowledge/:kid
+{"custom_metadata": {"图片": "IMG-0001,IMG-0002"}}
+```
+
+- 校验：≤20 个字段、键 1–64 字符、值 ≤1000 字符（string/number/bool/null）。
+  **超了不是 400 而是 500**（`invalid custom_metadata field "…"`），所以本地先截断。
+- 是**整体覆盖**：只传要保留的字段；不传 `custom_metadata` 就不改。
+- `GET /api/v1/knowledge/:kid` 读回来是对象（`data.custom_metadata`）。
+- **检索结果里是拍平文本**：`knowledge_custom_metadata` 为 `键: 值`、多字段按
+  换行分隔、键按字典序（`CustomMetadataText()` 的输出），空元数据是 `null`。
+  解析按行取 `图片:` 前缀，不要假设 JSON。
+- 元数据变化会触发一次文档摘要刷新（`summary_status` 转 `pending`），不阻塞解析。
+
+## 内嵌图标记在分块里原样保留（#21 实测）
+
+manual 推的 markdown 里写 `{{IMG-0001}}`，分块正文和 `knowledge-search` 返回的
+`content` 里都是原样的 `{{IMG-0001}}`。`SearchResult` 还带 `id`（分块 id）、
+`knowledge_id`、`start_at` / `end_at`、`chunk_type`、`knowledge_custom_metadata`。
+所以 chunk ↔ 图片的映射可以做两层：正文标记（分块级）+ knowledge 元数据
+（文档级兜底）。若将来标记不再保留，退路是用 `id` + `GET /api/v1/chunks/:kid`
+的 `start_at`/`end_at` 做偏移映射。
 
 ## 需要知道的限制
 
 - **手动 markdown 是异步解析的**：实测 2–3 秒从 `pending` 到 `completed`。`index --wait` 就是轮询这个状态；不要假装同步成功。
 - **没有「描述这一张图」的接口**：视觉模型只在 WeKnora 自己的索引管线里跑。所以真相源的 caption 由独立的 OpenAI 兼容 VLM 生成（ADR-0002），OCR 由本机 RapidOCR（ADR-0001）。
 - **不要上传原文件让它重新解析**：真相源里已经有转好的 md，用 `knowledge/manual` 推文本；上传 docx/pdf 会让 WeKnora 再解析一遍，口径还可能与我们的转换不一致。
+- **图片二进制不进 WeKnora**：图片母本只在真相源，检索回指由本仓库按编号解析
+  `images.path`（ADR-0005）。WeKnora 返回的 `resource://` / 直链只适用于它自己
+  收的文件，与本项目的图无关。
 - **embedding 模型按名字钉死**（spec §7.2）：默认找 `text-embedding-v4`，找不到就报错，不静默换「空间里第一个」。
 - 标签按知识库隔离；既有库可能有别的命名习惯（如 `005-雷达仿真`），所以默认建独立库 `052 文档库`。
 

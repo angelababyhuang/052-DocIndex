@@ -106,6 +106,15 @@ def test_create_knowledge_manual_payload(monkeypatch, client):
     assert payload["tag_ids"] == ["t-1", "t-2"]
 
 
+def test_set_knowledge_metadata_puts_custom_metadata(monkeypatch, client):
+    """#21：图片清单走 custom_metadata（manual 接口没有 metadata 字段，只能事后 PUT）。"""
+    calls = stub(monkeypatch, client, {"success": True})
+    client.set_knowledge_metadata("k-1", {"图片": "IMG-0001,IMG-0002"})
+    method, path, payload = calls[0]
+    assert (method, path) == ("PUT", "/api/v1/knowledge/k-1")
+    assert payload == {"custom_metadata": {"图片": "IMG-0001,IMG-0002"}}
+
+
 def test_search_payload(monkeypatch, client):
     calls = stub(monkeypatch, client, {"success": True, "data": [
         {"content": "连杆间隙 0.02mm", "score": 0.9},
