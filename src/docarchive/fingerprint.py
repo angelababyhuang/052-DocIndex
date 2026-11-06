@@ -43,18 +43,30 @@ def text_fp_of_plain(data: bytes) -> str:
 
 
 def compute_text_fp(path: Path, ext: str) -> str | None:
-    """从文件复算正文指纹（与 014 text_fingerprint 一致的逻辑，只读文件）。"""
+    """从文件复算正文指纹（与 014 text_fingerprint 一致的逻辑，只读文件）。
+
+    docx/doc 优先用 macOS 的 textutil（与 014 指纹一致）；textutil 不可用时
+    降级 anydoc（跨平台，但指纹会与 014 不同）。两者都失败才返回 None。
+    """
     try:
         if ext in PLAIN_EXTS:
             return text_fp_of_plain(path.read_bytes())
         if ext in TEXT_EXTS:
             import subprocess
-            r = subprocess.run(
-                ["textutil", "-convert", "txt", "-stdout", str(path)],
-                capture_output=True, timeout=60,
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                return text_fp_of_plain(r.stdout)
+            try:
+                r = subprocess.run(
+                    ["textutil", "-convert", "txt", "-stdout", str(path)],
+                    capture_output=True, timeout=60,
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    return text_fp_of_plain(r.stdout)
+            except (FileNotFoundError, OSError):
+                pass  # 非 macOS，降级 anydoc
+            # textutil 失败（返回非 0 或不可用）→ 降级 anydoc
+            import anydoc
+            md = anydoc.to_markdown(str(path))
+            if md and md.strip():
+                return hashlib.sha256(norm_text(md).encode()).hexdigest()
         if ext in ANYDOC_EXTS:
             import anydoc
             md = anydoc.to_markdown(str(path))

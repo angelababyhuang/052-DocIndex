@@ -1,0 +1,4 @@
+# 团队文档归档系统 — 依赖
+
+# 运行时依赖
+anydoc>=0.0.0          # docx/pdf/xlsx/pptx → markdown（textutil 的跨平台降级）
