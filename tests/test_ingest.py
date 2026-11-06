@@ -128,3 +128,102 @@ def test_scan_dir_registers_files(tmp_path, conn):
     n = ingest.scan_dir(conn, d, source_type="wechat")
     assert n == 2
     assert conn.execute("SELECT count(*) FROM occurrences").fetchone()[0] == 2
+
+
+# ---------- 票 #19：--since 只放行标准日期目录 ----------
+
+@pytest.fixture
+def inbox(tmp_path):
+    """扫描源单独放一个目录：测试库 test.db 在 tmp_path 根上，别被扫进来。"""
+    d = tmp_path / "inbox"
+    d.mkdir()
+    return d
+
+
+def _file(path, text="x"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _names(conn):
+    return {r["file_name"] for r in conn.execute("SELECT file_name FROM occurrences")}
+
+
+def test_scan_since_skips_non_date_dirs(conn, inbox):
+    _file(inbox / "2026-11-05" / "a.txt")
+    _file(inbox / "备份" / "b.txt")
+    _file(inbox / "待整理" / "c.txt")
+
+    n = ingest.scan_dir(conn, inbox, since="2026-11-04")
+    assert n == 1
+    assert _names(conn) == {"a.txt"}
+
+
+def test_scan_since_skips_files_outside_date_dirs(conn, inbox):
+    _file(inbox / "top.txt")
+    _file(inbox / "2026-11-05" / "a.txt")
+
+    ingest.scan_dir(conn, inbox, since="2026-11-01")
+    assert _names(conn) == {"a.txt"}
+
+
+def test_scan_since_compares_dates_as_strings(conn, inbox):
+    _file(inbox / "2026-11-03" / "old.txt")
+    _file(inbox / "2026-11-05" / "new.txt")
+
+    ingest.scan_dir(conn, inbox, since="2026-11-04")
+    assert _names(conn) == {"new.txt"}
+
+
+def test_scan_since_skips_nonstandard_date_names(conn, inbox):
+    _file(inbox / "2026-1-5" / "unpadded.txt")      # 未补零
+    _file(inbox / "2026-13-45" / "impossible.txt")  # 月份日期不合法
+    _file(inbox / "2026-11-05" / "ok.txt")
+
+    ingest.scan_dir(conn, inbox, since="2026-01-01")
+    assert _names(conn) == {"ok.txt"}
+
+
+def test_scan_all_includes_non_date_dirs_and_root_files(conn, inbox):
+    _file(inbox / "2026-11-05" / "a.txt")
+    _file(inbox / "备份" / "b.txt")
+    _file(inbox / "top.txt")
+
+    n = ingest.scan_dir(conn, inbox, all_files=True)
+    assert n == 3
+    assert _names(conn) == {"a.txt", "b.txt", "top.txt"}
+
+
+def test_scan_rejects_since_with_all(conn, inbox):
+    """同时给 since 和 all_files 是矛盾调用，直接报错，不静默忽略。"""
+    _file(inbox / "备份" / "b.txt")
+    with pytest.raises(ValueError):
+        ingest.scan_dir(conn, inbox, since="2026-11-04", all_files=True)
+
+
+def test_scan_rejects_malformed_since_at_api_level(conn, inbox):
+    with pytest.raises(ValueError):
+        ingest.scan_dir(conn, inbox, since="2026-1-5")
+
+
+def test_scan_date_dir_itself_as_root(conn, tmp_path):
+    """直接指向某个日期目录时，把目录名当日期用，别静默扫出 0 条。"""
+    d = tmp_path / "2026-11-05"
+    _file(d / "a.txt")
+    n = ingest.scan_dir(conn, d, since="2026-11-04")
+    assert n == 1 and _names(conn) == {"a.txt"}
+
+
+def test_is_date_dir_rejects_lookalikes():
+    assert not ingest.is_date_dir("2026-11-05\n")
+    assert not ingest.is_date_dir("２０２６-11-05")  # 全角数字
+    assert not ingest.is_date_dir("2026-11-05-备份")
+
+
+def test_is_date_dir():
+    assert ingest.is_date_dir("2026-11-05")
+    assert not ingest.is_date_dir("2026-1-5")
+    assert not ingest.is_date_dir("备份")
+    assert not ingest.is_date_dir("2026-13-01")
+    assert not ingest.is_date_dir("2026-11-32")

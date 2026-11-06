@@ -2,7 +2,7 @@
 
 命令：
   migrate <014-track.db> <目标.db> [--verify]   014 → 052 全量只读迁移
-  scan <目录> [--db 路径] [--source wechat] [--since YYYY-MM-DD]   扫描登记出现
+  scan <目录> [--db 路径] [--source wechat] [--since YYYY-MM-DD | --all]   扫描登记出现
   new-doc <出现ID> --project <项目> [--title 标题] [--category 类别]  确认为新文档
   new-version <出现ID> --doc <文档ID>   确认为某文档新版本
   merge <出现ID> --doc <文档ID> [--force]   确认为重复
@@ -33,8 +33,18 @@ def cmd_migrate(args):
 
 def cmd_scan(args):
     conn = db.connect(args.db)
-    n = ingest.scan_dir(conn, args.dir, source_type=args.source, since=args.since)
+    try:
+        n = ingest.scan_dir(conn, args.dir, source_type=args.source,
+                            since=args.since, all_files=args.all_files)
+    except (ValueError, FileNotFoundError) as e:
+        raise SystemExit(str(e))
     print(f"扫描 {args.dir} → 新登记 {n} 条出现")
+    if n == 0 and args.since and not args.all_files:
+        skipped = [d.name for d in sorted(args.dir.iterdir())
+                   if d.is_dir() and not ingest.is_date_dir(d.name)]
+        if skipped:
+            print(f"  提示：{'、'.join(skipped)} 不是标准日期目录，--since 不扫它们；"
+                  f"要全量请加 --all")
     # 给每条 pending 出现打印去重建议
     for row in conn.execute(
         "SELECT id, file_name, byte_hash, text_fp FROM occurrences "
@@ -163,7 +173,11 @@ def main():
     p.add_argument("--db", type=Path, default=Path("data/truth.db"),
                    help="目标真相源数据库路径")
     p.add_argument("--source", default="wechat", help="来源类型（默认 wechat）")
-    p.add_argument("--since", default=None, help="只处理日期子目录 ≥ 此日期（YYYY-MM-DD）")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--since", default=None,
+                   help="只扫标准日期子目录（YYYY-MM-DD）且 ≥ 此日期；非日期目录跳过")
+    g.add_argument("--all", dest="all_files", action="store_true",
+                   help="全量扫描，不看日期目录结构（对应 014 的 --since all）")
     p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("new-doc", help="确认一条出现为新文档")

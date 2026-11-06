@@ -1,6 +1,7 @@
 """摄入与去重：扫描目录登记出现，三层指纹去重给建议。"""
 from __future__ import annotations
 
+import re
 import sqlite3
 import zipfile
 from pathlib import Path
@@ -8,6 +9,31 @@ from pathlib import Path
 from docarchive import fingerprint
 
 SKIP_NAMES = {".DS_Store"}
+
+# 日期目录：YYYY-MM-DD（补零）。字典序即时间序，所以比较直接用字符串。
+_DATE_DIR_RE = re.compile(r"[0-9]{4}-([0-9]{2})-([0-9]{2})")
+
+
+def is_date_dir(name: str) -> bool:
+    """第一级子目录名是不是标准日期目录（如 2026-11-05）。
+
+    只认补零的 YYYY-MM-DD，并且月份/日期在合理范围内；「备份」这种非日期目录
+    返回 False，「2026-1-5」「2026-13-45」也返回 False。
+    """
+    m = _DATE_DIR_RE.fullmatch(name)
+    if not m:
+        return False
+    month, day = int(m.group(1)), int(m.group(2))
+    return 1 <= month <= 12 and 1 <= day <= 31
+
+
+def _scan_date_dir(src: Path, rel: tuple[str, ...]) -> str | None:
+    """这份文件归属哪个日期目录：扫描根本身是日期目录时用它，否则看第一级子目录。"""
+    if is_date_dir(src.name):
+        return src.name
+    if len(rel) > 1 and is_date_dir(rel[0]):
+        return rel[0]
+    return None
 
 # 去重建议里只参考「会进库」的出现：pending/archived 是有效去重基准，
 # merged/ignored 已被人工判过（分别是重复、忽略），不该再作为新文件的重复依据。
@@ -77,10 +103,22 @@ def suggestion(conn: sqlite3.Connection, byte_hash: str | None,
 
 
 def scan_dir(conn: sqlite3.Connection, src: Path, source_type: str = "wechat",
-             since: str | None = None) -> int:
-    """扫描目录登记出现（含 zip 展开）。返回新登记数。"""
+             since: str | None = None, all_files: bool = False) -> int:
+    """扫描目录登记出现（含 zip 展开）。返回新登记数。
+
+    日期范围（对应 014 的 --since）：
+      - all_files=True：全量扫，不看目录结构（= 014 的 --since all）
+      - since="YYYY-MM-DD"：只扫第一级子目录是**标准日期目录**且 >= since 的文件；
+        非日期目录（如「备份」）和直接放在根下的文件一律跳过——这是 #19 修的坑，
+        原来「备份」字典序大于日期，会被整个放行。
+      - 两者都不给：扫所有文件。
+    """
     if not src.is_dir():
         raise FileNotFoundError(f"目录不存在: {src}")
+    if since is not None and not is_date_dir(since):
+        raise ValueError(f"since 要标准日期（YYYY-MM-DD），收到: {since}")
+    if since is not None and all_files:
+        raise ValueError("all_files 与 since 不能同时给")
     n = 0
     for p in sorted(src.rglob("*")):
         if not p.is_file() or p.name in SKIP_NAMES or p.name.startswith((".", "~$")):
@@ -88,8 +126,11 @@ def scan_dir(conn: sqlite3.Connection, src: Path, source_type: str = "wechat",
         rel = p.relative_to(src).parts
         if not rel:
             continue
-        if since is not None and rel[0] < since:
-            continue
+        if since is not None and not all_files:
+            # 只认日期目录下的文件；根下散文件和「备份」这类目录跳过
+            date = _scan_date_dir(src, rel)
+            if date is None or date < since:
+                continue
         if p.suffix.lower() == ".zip":
             n += _register_zip_entries(conn, p)
         else:

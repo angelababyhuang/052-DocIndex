@@ -49,3 +49,50 @@ def test_cli_media_commands_end_to_end(tmp_path, monkeypatch, capsys, db_path):
     run_cli(monkeypatch, "media", "--project", "别的项目", "--db", str(db_path))
     out = capsys.readouterr().out
     assert "IMG-0001" not in out
+
+
+def test_cli_scan_since_skips_non_date_dirs_and_all_includes_them(tmp_path, monkeypatch, capsys, db_path):
+    inbox = tmp_path / "inbox"
+    (inbox / "2026-11-05").mkdir(parents=True)
+    (inbox / "2026-11-05" / "b.txt").write_text("y")
+    (inbox / "备份").mkdir()
+    (inbox / "备份" / "a.txt").write_text("x")
+
+    run_cli(monkeypatch, "scan", str(inbox), "--since", "2026-11-04", "--db", str(db_path))
+    out = capsys.readouterr().out
+    assert "新登记 1 条" in out and "a.txt" not in out
+
+    run_cli(monkeypatch, "scan", str(inbox), "--all", "--db", str(db_path))
+    out = capsys.readouterr().out
+    assert "新登记 1 条" in out and "a.txt" in out
+
+
+def test_cli_scan_since_and_all_are_mutually_exclusive(db_path, monkeypatch, tmp_path):
+    with pytest.raises(SystemExit):
+        run_cli(monkeypatch, "scan", str(tmp_path), "--since", "2026-11-04",
+                "--all", "--db", str(db_path))
+
+
+def test_cli_scan_rejects_malformed_since(tmp_path, monkeypatch, db_path):
+    with pytest.raises(SystemExit) as ei:
+        run_cli(monkeypatch, "scan", str(tmp_path), "--since", "2026-1-5", "--db", str(db_path))
+    assert "YYYY-MM-DD" in str(ei.value)
+
+
+def test_cli_scan_hints_when_only_non_date_dirs_matched(tmp_path, monkeypatch, capsys, db_path):
+    inbox = tmp_path / "inbox"
+    (inbox / "备份").mkdir(parents=True)
+    (inbox / "备份" / "a.txt").write_text("x")
+
+    run_cli(monkeypatch, "scan", str(inbox), "--since", "2026-11-04", "--db", str(db_path))
+    out = capsys.readouterr().out
+    assert "新登记 0 条" in out
+    assert "备份" in out and "--all" in out
+
+
+def test_cli_scan_date_dir_as_root_works(tmp_path, monkeypatch, capsys, db_path):
+    d = tmp_path / "2026-11-05"
+    d.mkdir(parents=True)
+    (d / "a.txt").write_text("x")
+    run_cli(monkeypatch, "scan", str(d), "--since", "2026-11-04", "--db", str(db_path))
+    assert "新登记 1 条" in capsys.readouterr().out
