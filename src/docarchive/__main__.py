@@ -64,20 +64,28 @@ def cmd_migrate(args):
 
 
 def cmd_scan(args):
+    cap = _captioner(args)
     with _open_db(args.db) as conn:
         try:
-            n = ingest.scan_dir(conn, args.dir, source_type=args.source,
-                                since=args.since, all_files=args.all_files)
+            stats = ingest.scan_dir(
+                conn, args.dir, source_type=args.source, since=args.since,
+                all_files=args.all_files, archive_dir=_archive_dir(args.db),
+                project=args.project, tags=args.tag or (), captioner=cap,
+                route_media=not args.no_media,
+            )
         except (ValueError, FileNotFoundError) as e:
             raise SystemExit(str(e))
-        print(f"扫描 {args.dir} → 新登记 {n} 条出现")
-        if n == 0 and args.since and not args.all_files:
+        print(f"扫描 {args.dir} → 文档 {stats.occurrences} / "
+              f"图片 {stats.images}（新 {stats.images_new}）/ "
+              f"视频 {stats.videos}（新 {stats.videos_new}）")
+        nothing = not (stats.occurrences or stats.images or stats.videos)
+        if nothing and args.since and not args.all_files:
             skipped = [d.name for d in sorted(args.dir.iterdir())
                        if d.is_dir() and not ingest.is_date_dir(d.name)]
             if skipped:
                 print(f"  提示：{'、'.join(skipped)} 不是标准日期目录，--since 不扫它们；"
                       f"要全量请加 --all")
-        # 给每条 pending 出现打印去重建议
+        # 给每条 pending 出现打印去重建议（媒体不进这里，已直接入库）
         for row in conn.execute(
             "SELECT id, file_name, byte_hash, text_fp FROM occurrences "
             "WHERE status='pending' ORDER BY id"
@@ -89,9 +97,12 @@ def cmd_scan(args):
 
 def cmd_new_doc(args):
     with _open_db(args.db) as conn:
-        doc_id, vid = archive.new_doc(conn, args.id, args.project,
-                                      _archive_dir(args.db), title=args.title,
-                                      category=args.category)
+        try:
+            doc_id, vid = archive.new_doc(conn, args.id, args.project,
+                                          _archive_dir(args.db), title=args.title,
+                                          category=args.category)
+        except ValueError as e:  # 媒体文件 / 非法类别：给操作建议，不甩 traceback
+            raise SystemExit(str(e))
     print(f"出现 #{args.id} → 新文档 #{doc_id}（现行版本 v{vid}）")
 
 
@@ -269,7 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verify", action="store_true", help="迁移后复算指纹并报告差异")
     p.set_defaults(func=cmd_migrate)
 
-    p = sub.add_parser("scan", help="扫描目录登记出现")
+    p = sub.add_parser("scan", help="扫描目录登记出现；图片/视频直接进媒体库")
     p.add_argument("dir", type=Path, help="要扫描的目录")
     _add_db_option(p)
     p.add_argument("--source", default="wechat", help="来源类型（默认 wechat）")
@@ -278,6 +289,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="只扫标准日期子目录（YYYY-MM-DD）且 ≥ 此日期；非日期目录跳过")
     g.add_argument("--all", dest="all_files", action="store_true",
                    help="全量扫描，不看日期目录结构（对应 014 的 --since all）")
+    p.add_argument("--project", default=None, help="本次登记的媒体的主归属项目")
+    p.add_argument("--tag", action="append", help="本次登记的媒体的关联项目标签（可重复）")
+    p.add_argument("--no-media", action="store_true",
+                   help="不把图片/视频送进媒体库，退回普通出现登记")
+    p.add_argument("--no-caption", action="store_true", help="不生成图片 caption")
     p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("new-doc", help="确认一条出现为新文档")

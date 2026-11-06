@@ -9,7 +9,7 @@ import sqlite3
 import zipfile
 from pathlib import Path
 
-from docarchive import db
+from docarchive import db, media
 
 STATUS_CN = {"pending": "待处理", "archived": "已归", "merged": "已并", "ignored": "已忽略"}
 CATEGORIES = ["研发", "测试", "管理", "商务", "资料"]
@@ -61,8 +61,17 @@ def _finish(conn: sqlite3.Connection, occ: sqlite3.Row, status: str,
 
 def new_doc(conn: sqlite3.Connection, oid: int, project: str, archive_dir: Path,
             title: str | None = None, category: str | None = None) -> tuple[int, int]:
-    """确认一条出现为新文档：建 document + version + 复制进受管目录。"""
+    """确认一条出现为新文档：建 document + version + 复制进受管目录。
+
+    媒体（图片/视频）不是文档，这里直接拒绝——它们该走 media 的 register 接口
+    （票 #20 的 D3）。拒绝发生在建任何实体之前，不留半成品。
+    """
     occ = get_occ(conn, oid)
+    if media.is_media(occ["file_name"]):
+        raise ValueError(
+            f"出现 #{oid}「{occ['file_name']}」是媒体文件，不能建成文档；"
+            f"图片用 register-image、视频用 register-video 登记进媒体库"
+        )
     pid = db.get_or_create_project(conn, project)
     title = title or Path(occ["file_name"]).stem
     if category is not None and category not in CATEGORIES:

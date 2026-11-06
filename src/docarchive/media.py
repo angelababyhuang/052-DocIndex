@@ -22,6 +22,17 @@ from docarchive.caption import Captioner
 
 VIDEOS_SUBDIR = "videos"
 
+# 媒体扩展名：scan 据此分流到媒体库，archive.new_doc 据此拒绝收编成文档。
+# 单独放在这里而不是新模块：媒体口径只有一个定义处，ingest/archive 都 import 它。
+IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"})
+VIDEO_EXTS = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm"})
+MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS
+
+
+def is_media(path: str | Path) -> bool:
+    """这个文件是不是媒体（图片/视频）？只按扩展名判断，不读内容。"""
+    return Path(path).suffix.lower() in MEDIA_EXTS
+
 
 @dataclass(frozen=True)
 class ImageReceipt:
