@@ -43,6 +43,8 @@
 | 现有三台机器 | 只做开发与客户端，不承担推理/存储职责 |
 
 > 说明（2026-11-06 用户拍板）：WeKnora 实例里已配好阿里云百炼四件套（embedding/问答/重排/视觉），全部沿用现有配置，不改。spec 早期写的 bge-m3 / GLM-4V-Flash / PaddleOCR-VL 作废，统一用 WeKnora 已配模型。
+>
+> 一期（#13）先落地**本机 RapidOCR**：转换要能离线跑、不依赖 WeKnora 在线。qwen3.8-flash VLM 作为增强，等 #15/#16 接入 WeKnora 后再接（见 `docs/adr/0001`）。
 
 现有三台机器（MBP M5 Pro 64G / Mac mini M6 16G / Windows i7 + RTX 3070 8G）在第一阶段不承担推理/存储职责。
 
@@ -89,7 +91,7 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 |---|---|---|
 | **出现 Occurrence** | 一份文档在某个来源的一次现身 | source_type（wechat/zip/feishu/manual）、source_path、file_name、size、byte_hash、text_fp、status（pending/archived/merged/ignored） |
 | **文档 Document** | 去重后的逻辑实体 | title、project_id（**单归属**）、current_version_id、category |
-| **版本 Version** | 一段具体内容 | document_id、byte_hash、text_fp、archive_path |
+| **版本 Version** | 一段具体内容 | document_id、byte_hash、text_fp、archive_path、markdown_path（转换出的 md，相对受管目录） |
 | **项目 Project** | 文档归属的业务项目 | name |
 
 **新增两类顶层实体**：
@@ -99,7 +101,7 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 | **图片 Image** | 去重后的独立图片实体 | `IMG-####`（内容 sha256 去重、永不改号）、名称、sha256、字节、扩展名、原始名、来源、caption（qwen3.8-flash 生成）、尺寸 |
 | **视频 Video** | 视频实体 | `VID-####`、名称、sha256、字节、扩展名、简介（**人填**）、时长、来源 |
 
-图片库字段继承 031 的 ADR-0001/0002：`IMG-0001` 起四位数字按内容 sha256 去重后顺序分配，ID 与内容绑定、永不改号、永不复用，单一母本 + 登记表 `索引.tsv`，引用只认 `{{IMG-0001}}`。
+图片库字段继承 031 的 ADR-0001/0002：`IMG-0001` 起四位数字按内容 sha256 去重后顺序分配，ID 与内容绑定、永不改号、永不复用，单一母本 + 登记表，引用只认 `{{IMG-0001}}`。052 的登记表就是真相源的 `images` 表（不再另存 031 的 `索引.tsv`，避免双源漂移）。
 
 ### 4.2 关联关系
 
@@ -114,6 +116,7 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 
 - **SQLite 数据库**：单一真相源，所有实体（文档/图片/视频/项目/关联）都在库里。
 - **图片/视频二进制**：文件系统（开发期）或 COS（云端），SQLite 存 URL/路径。
+- **md 派生物**：每个版本转出的 md 与受管文件同位（`doc-<ID>/v<版本ID>-<文件名>.md`），路径记在 `versions.markdown_path`；图片母本统一放 `archive/images/IMG-####.<ext>`，`images.path` 存相对受管目录的路径。
 - 关联项目标签的存法（JSON 列 vs 独立 tag 表）与 WeKnora 标签映射，见 §6.3。
 
 ## 5. 摄入与去重管道
@@ -141,10 +144,13 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 | 源格式 | 转换器 | 说明 |
 |---|---|---|
 | docx | pandoc 3.5 | 表格/图片/OMML 公式/脚注/多级标题；页眉页脚丢失（可接受） |
-| 文本型 PDF | markitdown / pdfplumber | 表格结构可能丢失，需人工校形 |
-| 扫描版 PDF | OCR（qwen3.8-flash VLM，RapidOCR 兜底） | 无 OCR 则无文本进索引 |
+| 文本型 PDF | markitdown（PyMuPDF 判文字层、补页面文字） | 表格结构可能丢失，需人工校形；内嵌图按页抽出进图片库 |
+| 扫描版 PDF | 本机 RapidOCR 离线（一期）／qwen3.8-flash VLM（待 WeKnora 接入） | 无 OCR 则无文本进索引；图文混排时只 OCR 无文字的页 |
 | pptx | python-pptx（读文本/表格/图片/图表） | pandoc 无 pptx reader |
 | xlsx | markitdown | 公式不求值 |
+| .doc | textutil 转 docx → pandoc | 仅 macOS（textutil）；Linux 上不支持 |
+
+转换后 md 与受管文件同目录（`doc-<ID>/v<版本ID>-*.md`），转换时抽出的图片进图片库，md 里对图片的引用一律改写成 `{{IMG-####}}`，不留临时媒体路径。
 
 ### 6.2 统一图片库
 

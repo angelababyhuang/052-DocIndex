@@ -7,11 +7,12 @@
   new-version <出现ID> --doc <文档ID>   确认为某文档新版本
   merge <出现ID> --doc <文档ID> [--force]   确认为重复
   ignore <出现ID>   确认为忽略
+  convert <版本ID>...   把版本转成 md（抽内嵌图入图片库）
 """
 import argparse
 from pathlib import Path
 
-from docarchive import archive, db, ingest, migrate
+from docarchive import archive, convert, db, ingest, migrate
 
 
 def cmd_migrate(args):
@@ -74,6 +75,16 @@ def cmd_ignore(args):
     conn.close()
 
 
+def cmd_convert(args):
+    conn = db.connect(args.db)
+    adir = _archive_dir(args.db)
+    for vid in args.version_id:
+        r = convert.convert_version(conn, vid, adir)
+        print(f"版本 #{vid} → {r.markdown_path}（图片 {r.images_total} 张，"
+              f"新入图片库 {r.images_new} 张）")
+    conn.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description="团队文档归档系统 CLI")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -118,6 +129,11 @@ def main():
     p.add_argument("--reason", default=None, help="忽略原因")
     p.add_argument("--db", type=Path, default=Path("data/truth.db"))
     p.set_defaults(func=cmd_ignore)
+
+    p = sub.add_parser("convert", help="版本转 md + 抽内嵌图入图片库")
+    p.add_argument("version_id", type=int, nargs="+", help="版本 ID（可多个）")
+    p.add_argument("--db", type=Path, default=Path("data/truth.db"))
+    p.set_defaults(func=cmd_convert)
 
     args = ap.parse_args()
     args.func(args)

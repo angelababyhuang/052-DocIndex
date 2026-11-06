@@ -42,11 +42,32 @@ def text_fp_of_plain(data: bytes) -> str:
     return hashlib.sha256(norm_text(data.decode("utf-8", "ignore")).encode()).hexdigest()
 
 
+def _markdown_fp(path: Path) -> str | None:
+    """跨平台兜底：先用 anydoc（与 014 降级路径一致），装不上再用 markitdown。
+
+    anydoc 的 PyPI 版只支持到 Python 3.10，3.11+ 的环境（含 CI 的 3.12）
+    没有它，此时用 markitdown 顶上，指纹同样与 014 不同（只有 textutil 那条
+    主路径与 014 一致）。
+    """
+    try:
+        import anydoc
+        md = anydoc.to_markdown(str(path))
+    except Exception:
+        try:
+            from markitdown import MarkItDown
+            md = MarkItDown().convert(str(path)).text_content
+        except Exception:
+            return None
+    if md and md.strip():
+        return hashlib.sha256(norm_text(md).encode()).hexdigest()
+    return None
+
+
 def compute_text_fp(path: Path, ext: str) -> str | None:
     """从文件复算正文指纹（与 014 text_fingerprint 一致的逻辑，只读文件）。
 
     docx/doc 优先用 macOS 的 textutil（与 014 指纹一致）；textutil 不可用时
-    降级 anydoc（跨平台，但指纹会与 014 不同）。两者都失败才返回 None。
+    降级 anydoc / markitdown（跨平台，但指纹会与 014 不同）。都失败才返回 None。
     """
     try:
         if ext in PLAIN_EXTS:
@@ -61,17 +82,11 @@ def compute_text_fp(path: Path, ext: str) -> str | None:
                 if r.returncode == 0 and r.stdout.strip():
                     return text_fp_of_plain(r.stdout)
             except (FileNotFoundError, OSError):
-                pass  # 非 macOS，降级 anydoc
-            # textutil 失败（返回非 0 或不可用）→ 降级 anydoc
-            import anydoc
-            md = anydoc.to_markdown(str(path))
-            if md and md.strip():
-                return hashlib.sha256(norm_text(md).encode()).hexdigest()
+                pass  # 非 macOS / textutil 不可用，降级
+            # textutil 失败（返回非 0 或不可用）→ 降级跨平台转换器
+            return _markdown_fp(path)
         if ext in ANYDOC_EXTS:
-            import anydoc
-            md = anydoc.to_markdown(str(path))
-            if md and md.strip():
-                return hashlib.sha256(norm_text(md).encode()).hexdigest()
+            return _markdown_fp(path)
     except Exception:
         pass
     return None

@@ -117,3 +117,18 @@ def test_document_project_tag(conn):
         )
     ]
     assert tags == [pb]
+
+
+def test_connect_creates_missing_parent_dir(tmp_path):
+    """首次用默认路径 data/truth.db 时，父目录不存在也要能建库。"""
+    conn = db.connect(tmp_path / "data" / "truth.db")
+    assert (tmp_path / "data" / "truth.db").exists()
+    conn.close()
+
+
+def test_versions_have_markdown_path(conn):
+    """#13：版本要能记住转换出的 md 位置。"""
+    conn.execute("INSERT INTO documents(title) VALUES ('D')")
+    conn.execute("INSERT INTO versions(document_id, markdown_path) VALUES (1, 'doc-1/v1-a.md')")
+    row = conn.execute("SELECT markdown_path FROM versions WHERE id=1").fetchone()
+    assert row["markdown_path"] == "doc-1/v1-a.md"

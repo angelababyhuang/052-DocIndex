@@ -1,4 +1,13 @@
 # 团队文档归档系统 — 依赖
 
+# 系统依赖（不在 pip 里，需自行装）
+#   pandoc >= 3.0     docx → md（表格 / 图片 / OMML 公式），见 docs/adr/0001
+
 # 运行时依赖
-anydoc>=0.0.0          # docx/pdf/xlsx/pptx → markdown（textutil 的跨平台降级）
+# anydoc 的 PyPI 版只支持到 Python 3.10，3.11+（含 CI 的 3.12）装不上；
+# 那条环境里 fingerprint 的跨平台兜底改走 markitdown（见 fingerprint._markdown_fp）
+anydoc>=0.0.0; python_version < "3.11"   # textutil 不可用时的正文指纹复算
+markitdown>=0.1.5      # 文本型 PDF / xlsx → markdown
+python-pptx>=1.0       # pptx 读文本/表格/图表/图片（pandoc 无 pptx reader）
+PyMuPDF>=1.24          # PDF 文字层判定 + 逐页渲染给 OCR
+rapidocr-onnxruntime>=1.4   # 扫描版 PDF 离线 OCR（模型随包，不联网）

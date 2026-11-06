@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS versions(
   byte_hash TEXT,
   text_fp TEXT,
   archive_path TEXT,
+  markdown_path TEXT,                 -- 转换出的 md（相对受管目录，派生自 archive_path）
   note TEXT,
   created_at TEXT DEFAULT (datetime('now','localtime')));
 
@@ -105,6 +106,8 @@ CREATE TABLE IF NOT EXISTS code_counters(
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
     """打开（或创建）真相源数据库，应用 schema。"""
+    if str(db_path) != ":memory:":
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
@@ -113,7 +116,7 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 def _migrate_columns(conn: sqlite3.Connection) -> None:
-    """幂等列迁移：给既有库补上后加的列（images.path / videos.path / videos.project_id）。"""
+    """幂等列迁移：给既有库补上后加的列（versions.markdown_path / images.path / videos 两列）。"""
     def _cols(table: str) -> set[str]:
         return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
@@ -121,6 +124,8 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE images ADD COLUMN path TEXT")
     if "path" not in _cols("videos"):
         conn.execute("ALTER TABLE videos ADD COLUMN path TEXT")
+    if "markdown_path" not in _cols("versions"):
+        conn.execute("ALTER TABLE versions ADD COLUMN markdown_path TEXT")
     if "project_id" not in _cols("videos"):
         conn.execute("ALTER TABLE videos ADD COLUMN project_id INTEGER REFERENCES projects(id)")
     conn.commit()
