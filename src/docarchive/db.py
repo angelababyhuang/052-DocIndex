@@ -153,6 +153,27 @@ def get_or_create_project(conn: sqlite3.Connection, name: str) -> int:
     return conn.execute("INSERT INTO projects(name) VALUES (?)", (name,)).lastrowid
 
 
+def set_primary_project(conn: sqlite3.Connection, table: str, entity_id: int,
+                        project_name: str | None) -> None:
+    """按项目名设主归属，**只在为空时设**（后来的登记不改已定的归属）。
+
+    名不存在就建项目；但如果实体的主归属已经定了，就不白建一个孤儿项目。
+    table 只由调用点传字面量，不接用户输入。不 commit。
+    """
+    if not project_name:
+        return
+    row = conn.execute(
+        f"SELECT project_id FROM {table} WHERE id=?", (entity_id,)
+    ).fetchone()
+    if row is None or row["project_id"] is not None:
+        return
+    pid = get_or_create_project(conn, project_name)
+    conn.execute(
+        f"UPDATE {table} SET project_id=? WHERE id=? AND project_id IS NULL",
+        (pid, entity_id),
+    )
+
+
 def next_code(conn: sqlite3.Connection, prefix: str, width: int = 4) -> str:
     """分配下一个 entity code（如 IMG-0001 / VID-0002）。
 

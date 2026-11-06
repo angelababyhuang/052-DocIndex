@@ -1,18 +1,9 @@
 """票 #12：摄入与去重管道。"""
 import hashlib
-import sqlite3
 
 import pytest
 
-from docarchive import db as appdb
 from docarchive import ingest
-
-
-@pytest.fixture
-def conn(tmp_path):
-    c = appdb.connect(tmp_path / "test.db")
-    yield c
-    c.close()
 
 
 def _bh(data: bytes) -> str:
@@ -131,14 +122,6 @@ def test_scan_dir_registers_files(tmp_path, conn):
 
 
 # ---------- 票 #19：--since 只放行标准日期目录 ----------
-
-@pytest.fixture
-def inbox(tmp_path):
-    """扫描源单独放一个目录：测试库 test.db 在 tmp_path 根上，别被扫进来。"""
-    d = tmp_path / "inbox"
-    d.mkdir()
-    return d
-
 
 def _file(path, text="x"):
     path.parent.mkdir(parents=True, exist_ok=True)

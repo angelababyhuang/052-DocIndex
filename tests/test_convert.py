@@ -9,11 +9,11 @@ import importlib.util
 import re
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
-from docarchive import archive, convert, db as appdb, imagelib, ingest
+from docarchive import archive, convert, imagelib
+from support import make_pending, make_png
 
 HAS_PANDOC = shutil.which("pandoc") is not None
 HAS_PPTX = importlib.util.find_spec("pptx") is not None
@@ -32,30 +32,7 @@ needs_pil = pytest.mark.skipif(not HAS_PIL, reason="需要 Pillow")
 needs_textutil = pytest.mark.skipif(not HAS_TEXTUTIL, reason="需要 macOS textutil")
 
 
-@pytest.fixture
-def conn(tmp_path):
-    c = appdb.connect(tmp_path / "test.db")
-    yield c
-    c.close()
-
-
-@pytest.fixture
-def archive_dir(tmp_path):
-    d = tmp_path / "archive"
-    d.mkdir()
-    return d
-
-
 # ---------- 样例文件工厂 ----------
-
-def _png(path, text="EMBEDDED"):
-    from PIL import Image, ImageDraw
-
-    im = Image.new("RGB", (160, 80), "white")
-    ImageDraw.Draw(im).text((12, 30), text, fill="black")
-    im.save(path)
-    return path
-
 
 def _text_image(path, text):
     """白底黑字大号字，给 OCR 用。"""
@@ -79,7 +56,7 @@ def _text_image(path, text):
 
 def _make_docx(dirpath, image_text="EMBEDDED"):
     """docx：标题 + 正文 + OMML 公式 + 表格 + 内嵌图片。"""
-    img = _png(dirpath / "pic.png", image_text)
+    img = make_png(dirpath / "pic.png", image_text)
     md = dirpath / "src.md"
     md.write_text(
         "# 连杆方案\n\n"
@@ -157,13 +134,6 @@ def _make_xlsx(path):
     return path
 
 
-def _pending(conn, src: Path, source_type="wechat", file_name=None):
-    data = src.read_bytes()
-    ingest.register(conn, source_type, str(src), None, file_name or src.name,
-                    len(data), hashlib.sha256(data).hexdigest(), None)
-    return conn.execute("SELECT * FROM occurrences ORDER BY id DESC LIMIT 1").fetchone()
-
-
 # ---------- 纯文本 / 不支持的格式 ----------
 
 def test_plain_text_passthrough(tmp_path):
@@ -239,7 +209,7 @@ def test_text_pdf_is_not_treated_as_scanned(tmp_path):
 @needs_pptx
 @needs_pil
 def test_pptx_extracts_text_table_and_image(tmp_path):
-    png = _png(tmp_path / "logo.png", "LOGO")
+    png = make_png(tmp_path / "logo.png", "LOGO")
     pptx = _make_pptx(tmp_path / "deck.pptx", png)
     c = convert.convert_file(pptx)
 
@@ -268,7 +238,7 @@ def test_xlsx_to_markdown(tmp_path):
 @needs_pil
 def test_convert_version_writes_md_and_links_images(conn, archive_dir, tmp_path):
     docx, png_bytes = _make_docx(tmp_path)
-    occ = _pending(conn, docx)
+    occ = make_pending(conn, docx)
     doc_id, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
 
     res = convert.convert_version(conn, vid, archive_dir)
@@ -309,9 +279,9 @@ def test_same_image_across_documents_gets_one_code(conn, archive_dir, tmp_path):
     d2.mkdir()
     docx2, _ = _make_docx(d2, "SAME")
 
-    occ1 = _pending(conn, docx1, file_name="方案一.docx")
+    occ1 = make_pending(conn, docx1, file_name="方案一.docx")
     doc1, vid1 = archive.new_doc(conn, occ1["id"], "浮标项目", archive_dir)
-    occ2 = _pending(conn, docx2, file_name="方案二.docx")
+    occ2 = make_pending(conn, docx2, file_name="方案二.docx")
     doc2, vid2 = archive.new_doc(conn, occ2["id"], "浮标项目", archive_dir)
 
     r1 = convert.convert_version(conn, vid1, archive_dir)
@@ -335,8 +305,8 @@ def test_two_distinct_images_get_sequential_codes(conn, archive_dir, tmp_path):
     from pptx import Presentation
     from pptx.util import Inches
 
-    a = _png(tmp_path / "a.png", "AAA")
-    b = _png(tmp_path / "b.png", "BBB")
+    a = make_png(tmp_path / "a.png", "AAA")
+    b = make_png(tmp_path / "b.png", "BBB")
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
     slide.shapes.add_picture(str(a), Inches(1), Inches(1), width=Inches(1))
@@ -344,7 +314,7 @@ def test_two_distinct_images_get_sequential_codes(conn, archive_dir, tmp_path):
     deck = tmp_path / "deck.pptx"
     prs.save(str(deck))
 
-    occ = _pending(conn, deck)
+    occ = make_pending(conn, deck)
     _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
     res = convert.convert_version(conn, vid, archive_dir)
 
@@ -361,7 +331,7 @@ def test_scanned_pdf_conversion_adds_no_images(conn, archive_dir, tmp_path):
     """OCR 出的文本不产生图片实体（页面图不是文档内嵌图）。"""
     img = _text_image(tmp_path / "scan.png", "Archive 2026")
     pdf = _make_scanned_pdf(tmp_path / "scan.pdf", img)
-    occ = _pending(conn, pdf)
+    occ = make_pending(conn, pdf)
     _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
     convert.convert_version(conn, vid, archive_dir)
     assert conn.execute("SELECT COUNT(*) c FROM images").fetchone()["c"] == 0
@@ -424,7 +394,7 @@ def test_pptx_chart_data_becomes_table(tmp_path):
 def test_reconvert_is_idempotent(conn, archive_dir, tmp_path):
     """重跑 convert 不重复分配 IMG-ID，也不重复挂关联。"""
     docx, _ = _make_docx(tmp_path)
-    occ = _pending(conn, docx)
+    occ = make_pending(conn, docx)
     doc_id, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
 
     r1 = convert.convert_version(conn, vid, archive_dir)
@@ -446,7 +416,7 @@ def test_text_pdf_embedded_figure_enters_image_library(tmp_path):
     """文本型 PDF 里的插图也要抽出来进图片库（spec §6.2 内嵌图）。"""
     import fitz
 
-    png = _png(tmp_path / "fig.png", "FIGURE")
+    png = make_png(tmp_path / "fig.png", "FIGURE")
     doc = fitz.open()
     page = doc.new_page()
     page.insert_text((72, 100), "Body text with a figure", fontsize=14)
@@ -467,7 +437,7 @@ def test_pptx_picture_placeholder_is_extracted(tmp_path):
     """图片占位符（"标题+图片"版式）里的图也要抽（shape_type 是 PLACEHOLDER 不是 PICTURE）。"""
     from pptx import Presentation
 
-    png = _png(tmp_path / "ph.png", "PLACEHOLDER")
+    png = make_png(tmp_path / "ph.png", "PLACEHOLDER")
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[8])  # Picture with Caption
     slide.shapes.title.text = "封面"
@@ -488,7 +458,7 @@ def test_pptx_group_shapes_are_read(tmp_path):
     from pptx import Presentation
     from pptx.util import Inches
 
-    png = _png(tmp_path / "g.png", "GROUP")
+    png = make_png(tmp_path / "g.png", "GROUP")
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     group = slide.shapes.add_group_shape()
@@ -544,7 +514,7 @@ def test_convert_version_captions_embedded_images(conn, archive_dir, tmp_path):
             return "一张连杆示意图"
 
     docx, _ = _make_docx(tmp_path)
-    occ = _pending(conn, docx)
+    occ = make_pending(conn, docx)
     _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
     cap = FakeCapture()
 
@@ -561,7 +531,7 @@ def test_convert_version_captions_embedded_images(conn, archive_dir, tmp_path):
 @needs_pil
 def test_embedded_image_inherits_document_project(conn, archive_dir, tmp_path):
     docx, _ = _make_docx(tmp_path)
-    occ = _pending(conn, docx)
+    occ = make_pending(conn, docx)
     _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
     convert.convert_version(conn, vid, archive_dir)
     row = conn.execute(
@@ -575,7 +545,7 @@ def test_embedded_image_inherits_document_project(conn, archive_dir, tmp_path):
 def test_embedded_image_gets_readable_display_name(conn, archive_dir, tmp_path):
     """pandoc 的媒体名（rId20）不适合当显示名，用「文档标题 图N」。"""
     docx, _ = _make_docx(tmp_path)
-    occ = _pending(conn, docx)
+    occ = make_pending(conn, docx)
     _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
     convert.convert_version(conn, vid, archive_dir)
     # 文档标题来自文件名（sample.docx → sample），不是 docx 里的 H1
@@ -591,7 +561,7 @@ def test_convert_reports_caption_errors(conn, archive_dir, tmp_path):
             raise RuntimeError("模型接口返回 401")
 
     docx, _ = _make_docx(tmp_path)
-    occ = _pending(conn, docx)
+    occ = make_pending(conn, docx)
     _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
 
     r = convert.convert_version(conn, vid, archive_dir, captioner=BadCapturer())
@@ -611,7 +581,7 @@ def test_convert_recaption_regenerates_embedded(conn, archive_dir, tmp_path):
             return self.text
 
     docx, _ = _make_docx(tmp_path)
-    occ = _pending(conn, docx)
+    occ = make_pending(conn, docx)
     _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
 
     convert.convert_version(conn, vid, archive_dir, captioner=FixedCaptioner("旧描述"))
@@ -631,11 +601,11 @@ def test_caption_http_happens_outside_write_transaction(conn, archive_dir, tmp_p
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     for i, name in enumerate(("a.png", "b.png")):
-        pic = _png(tmp_path / name, name)
+        pic = make_png(tmp_path / name, name)
         slide.shapes.add_picture(str(pic), Inches(1 + i * 2), Inches(1), width=Inches(1))
     deck = tmp_path / "deck.pptx"
     prs.save(str(deck))
-    occ = _pending(conn, deck)
+    occ = make_pending(conn, deck)
     _, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)
 
     seen = []

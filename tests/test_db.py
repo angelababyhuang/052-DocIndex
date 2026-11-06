@@ -1,16 +1,5 @@
 """票 #10：数据模型与真相源骨架。"""
-import sqlite3
-
-import pytest
-
 from docarchive import db
-
-
-@pytest.fixture
-def conn(tmp_path):
-    c = db.connect(tmp_path / "test.db")
-    yield c
-    c.close()
 
 
 def test_schema_creates_all_tables(conn):

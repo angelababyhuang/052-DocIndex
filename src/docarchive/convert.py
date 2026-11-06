@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import functools
 import re
 import shutil
 import sqlite3
@@ -23,7 +24,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from docarchive import imagelib
+from docarchive import db, imagelib
 from docarchive.caption import Captioner
 
 # 转换阶段的图片占位，登记后替换成 imagelib.image_ref() 的真实引用
@@ -125,9 +126,10 @@ def convert_version(conn: sqlite3.Connection, version_id: int,
 
     conv = convert_file(src)
     doc = conn.execute(
-        "SELECT title, project_id FROM documents WHERE id=?", (v["document_id"],)
+        "SELECT d.title, p.name AS project FROM documents d "
+        "LEFT JOIN projects p ON p.id = d.project_id WHERE d.id = ?",
+        (v["document_id"],),
     ).fetchone()
-    doc_project = doc["project_id"]
     md, total, new = conv.markdown, 0, 0
     registered: list[tuple[int, ExtractedImage]] = []
     for i, img in enumerate(conv.images, 1):
@@ -147,11 +149,7 @@ def convert_version(conn: sqlite3.Connection, version_id: int,
             (v["document_id"], reg.id, img.position),
         )
         # 内嵌图跟随文档的主归属；已有归属的（先作为独立图登记过）不被改动
-        if doc_project is not None:
-            conn.execute(
-                "UPDATE images SET project_id=? WHERE id=? AND project_id IS NULL",
-                (doc_project, reg.id),
-            )
+        db.set_primary_project(conn, "images", reg.id, doc["project"])
         registered.append((reg.id, img))
 
     md_rel = str(Path(v["archive_path"]).with_suffix(".md"))
@@ -164,9 +162,9 @@ def convert_version(conn: sqlite3.Connection, version_id: int,
     captions_new, caption_errors = 0, []
     if captioner is not None:
         for image_id, img in registered:
-            # ensure_caption 每次生成后自己 commit：下一张图的 HTTP 不落在写事务里
             res = imagelib.ensure_caption(conn, image_id, img.data, img.ext,
                                           captioner, force=recaption)
+            conn.commit()  # 每张提交：下一张的 HTTP 不落在写事务里
             if res.generated:
                 captions_new += 1
             if res.error:
@@ -340,23 +338,23 @@ def _mixed_pages(doc, text_pages: list[str]) -> str:
     return "\n\n".join(parts)
 
 
-_ocr_engine = None
-
-
-def _ocr_page(page) -> str:
-    """单页 → 图片 → RapidOCR → 按行拼文本。"""
-    global _ocr_engine
+@functools.lru_cache(maxsize=1)
+def _ocr_engine():
+    """RapidOCR 引擎单例（lru_cache 而不是模块全局：测试里能 cache_clear）。"""
     try:
         from rapidocr_onnxruntime import RapidOCR
     except ImportError as e:  # pragma: no cover - 环境缺依赖时给可读的错
         raise RuntimeError("扫描版 PDF 需要 rapidocr-onnxruntime") from e
+    return RapidOCR()
 
-    if _ocr_engine is None:
-        _ocr_engine = RapidOCR()
+
+def _ocr_page(page) -> str:
+    """单页 → 图片 → RapidOCR → 按行拼文本。"""
+    engine = _ocr_engine()
     with tempfile.TemporaryDirectory() as td:
         png = Path(td) / "page.png"
         page.get_pixmap(dpi=200).save(str(png))
-        result, _ = _ocr_engine(str(png))
+        result, _ = engine(str(png))
     return "\n".join(line[1] for line in (result or []))
 
 

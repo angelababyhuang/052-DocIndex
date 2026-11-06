@@ -66,7 +66,7 @@ def register_standalone_image(conn: sqlite3.Connection, archive_dir: str | Path,
 
     result = imagelib.ensure_caption(conn, reg.id, data, src.suffix,
                                      captioner, force=recaption)
-    conn.commit()
+    conn.commit()  # 描述写完再提交（模型调用本来就在事务外）
     return ImageReceipt(reg.code, reg.created, result.text, result.error)
 
 
@@ -95,7 +95,7 @@ def register_video(conn: sqlite3.Connection, archive_dir: str | Path,
             "INSERT INTO videos(code, name, sha256, byte_size, ext, original_name, "
             "source, path, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (code, src.stem, sha, src.stat().st_size,
-             (src.suffix or ".bin").lower(), src.name, str(src), rel, duration),
+             imagelib.normalize_ext(src.suffix), src.name, str(src), rel, duration),
         )
         vid, created = cur.lastrowid, True
 
@@ -135,7 +135,7 @@ def overview(conn: sqlite3.Connection, project: str | None = None,
     return {"images": images, "videos": videos}
 
 
-def _overview_rows(conn, table: str, tag_table: str, tag_column: str,
+def _overview_rows(conn: sqlite3.Connection, table: str, tag_table: str, tag_column: str,
                    text_column: str, name_column: str,
                    project: str | None, tag: str | None) -> list[dict]:
     sql = (
@@ -170,16 +170,7 @@ def _apply_project(conn: sqlite3.Connection, table: str, tag_table: str,
 
     table / tag_table / tag_column 只由本模块的调用点传字面量，不接用户输入。
     """
-    if project:
-        row = conn.execute(
-            f"SELECT project_id FROM {table} WHERE id=?", (entity_id,)
-        ).fetchone()
-        if row["project_id"] is None:  # 先判空再建项目，别为没用的归属建孤儿项目
-            pid = db.get_or_create_project(conn, project)
-            conn.execute(
-                f"UPDATE {table} SET project_id=? WHERE id=? AND project_id IS NULL",
-                (pid, entity_id),
-            )
+    db.set_primary_project(conn, table, entity_id, project)
     for tag in tags:
         tid = db.get_or_create_project(conn, tag)
         conn.execute(

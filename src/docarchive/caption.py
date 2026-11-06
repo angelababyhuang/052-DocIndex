@@ -16,15 +16,13 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
-import os
 import socket
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Mapping, Protocol
 
-from docarchive.env import load_dotenv
+from docarchive.env import merged
 
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MODEL = "glm-4v-flash"
@@ -57,7 +55,7 @@ class VLMConfig:
 def config_from_env(env: Mapping[str, str] | None = None) -> VLMConfig | None:
     """从环境变量拼出配置；没有密钥返回 None（调用方据此跳过 caption）。"""
     if env is None:
-        env = {**load_dotenv(), **os.environ}
+        env = merged()
     api_key = env.get("CAPTION_API_KEY") or env.get("ZHIPU_API_KEY")
     if not api_key:
         return None

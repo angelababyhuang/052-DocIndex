@@ -1,24 +1,9 @@
 """票 #18：归档落库 + triage 人工确认。"""
 import hashlib
-import sqlite3
 
 import pytest
 
-from docarchive import archive, db as appdb, ingest
-
-
-@pytest.fixture
-def conn(tmp_path):
-    c = appdb.connect(tmp_path / "test.db")
-    yield c
-    c.close()
-
-
-@pytest.fixture
-def archive_dir(tmp_path):
-    d = tmp_path / "archive"
-    d.mkdir()
-    return d
+from docarchive import archive, ingest
 
 
 def _make_occ(conn, source_type="wechat", source_path="/tmp/x.txt",

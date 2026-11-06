@@ -1,36 +1,14 @@
 """票 #15：WeKnora 派生索引接入。"""
-import hashlib
-
 import pytest
 
-from docarchive import archive, db as appdb, index, ingest, media
-
-
-@pytest.fixture
-def conn(tmp_path):
-    c = appdb.connect(tmp_path / "test.db")
-    yield c
-    c.close()
-
-
-@pytest.fixture
-def archive_dir(tmp_path):
-    d = tmp_path / "archive"
-    d.mkdir()
-    return d
-
-
-def _pending(conn, src, file_name=None):
-    data = src.read_bytes()
-    ingest.register(conn, "wechat", str(src), None, file_name or src.name,
-                    len(data), hashlib.sha256(data).hexdigest(), None)
-    return conn.execute("SELECT * FROM occurrences ORDER BY id DESC LIMIT 1").fetchone()
+from docarchive import archive, index, media
+from support import make_pending, make_video
 
 
 def _archived_doc(conn, archive_dir, tmp_path, *, title="连杆方案", category="测试"):
     src = tmp_path / "src.md"
     src.write_text("# 连杆方案\n\n连杆间隙复测 0.02mm，周五出报告。\n", encoding="utf-8")
-    occ = _pending(conn, src, "连杆方案.md")
+    occ = make_pending(conn, src, "连杆方案.md")
     doc_id, vid = archive.new_doc(conn, occ["id"], "浮标项目", archive_dir,
                                   title=title, category=category)
     # 受管文件换成 md 并登记（模拟已转换）
@@ -85,7 +63,7 @@ def test_collect_units_builds_document_image_video(conn, archive_dir, tmp_path):
     media.register_standalone_image(conn, archive_dir, img, project="浮标项目",
                                     tags=["海试项目"], captioner=None)
     conn.execute("UPDATE images SET caption='一张连杆间隙测量截图' WHERE code='IMG-0001'")
-    media.register_video(conn, archive_dir, _video(tmp_path / "v.mp4"),
+    media.register_video(conn, archive_dir, make_video(tmp_path / "v.mp4"),
                          project="浮标项目", intro="现场调试录像")
     conn.commit()
 
@@ -113,7 +91,7 @@ def test_collect_units_builds_document_image_video(conn, archive_dir, tmp_path):
 def test_collect_units_skips_documents_without_md(conn, archive_dir, tmp_path):
     src = tmp_path / "x.md"
     src.write_text("正文", encoding="utf-8")
-    occ = _pending(conn, src)
+    occ = make_pending(conn, src)
     archive.new_doc(conn, occ["id"], "浮标项目", archive_dir)  # 没转换过，markdown_path 为 NULL
     assert index.collect_units(conn, archive_dir) == []
 
@@ -132,7 +110,7 @@ def test_image_without_caption_still_indexed_by_code(conn, archive_dir, tmp_path
 
 
 def test_video_without_intro_still_indexed_by_code(conn, archive_dir, tmp_path):
-    media.register_video(conn, archive_dir, _video(tmp_path / "v.mp4"), project="浮标项目")
+    media.register_video(conn, archive_dir, make_video(tmp_path / "v.mp4"), project="浮标项目")
     units = [u for u in index.collect_units(conn, archive_dir) if u.kind == "video"]
     assert len(units) == 1
     assert "VID-0001" in units[0].content
@@ -187,6 +165,3 @@ def test_plan_units_lists_units_and_tags_without_network(conn, archive_dir, tmp_
     assert "项目/浮标项目" in plan.tags and "类别/测试" in plan.tags
 
 
-def _video(path):
-    path.write_bytes(b"\x00\x00\x00\x18ftypmp42demo")
-    return path

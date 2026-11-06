@@ -4,25 +4,10 @@ import io
 import json
 import os
 import urllib.error
-from pathlib import Path
-
 import pytest
 
-from docarchive import caption as capmod, db as appdb, env, media
-
-
-@pytest.fixture
-def conn(tmp_path):
-    c = appdb.connect(tmp_path / "test.db")
-    yield c
-    c.close()
-
-
-@pytest.fixture
-def archive_dir(tmp_path):
-    d = tmp_path / "archive"
-    d.mkdir()
-    return d
+from docarchive import caption as capmod, env, media
+from support import make_mp4_with_mvhd, make_png, make_video
 
 
 class FakeCaptioner:
@@ -40,25 +25,10 @@ class FakeCaptioner:
         return self.text
 
 
-def _png(path: Path, text="SCREEN") -> Path:
-    pytest.importorskip("PIL")
-    from PIL import Image, ImageDraw
-
-    im = Image.new("RGB", (200, 100), "white")
-    ImageDraw.Draw(im).text((15, 40), text, fill="black")
-    im.save(path)
-    return path
-
-
-def _faux_video(path: Path, payload: bytes = b"\x00\x00\x00\x18ftypmp42fake") -> Path:
-    path.write_bytes(payload)
-    return path
-
-
 # ---------- 独立图 ----------
 
 def test_register_standalone_image_assigns_img_code(conn, archive_dir, tmp_path):
-    src = _png(tmp_path / "shot.png")
+    src = make_png(tmp_path / "shot.png")
     data = src.read_bytes()
     fake = FakeCaptioner()
 
@@ -82,7 +52,7 @@ def test_register_standalone_image_assigns_img_code(conn, archive_dir, tmp_path)
 
 
 def test_duplicate_image_reuses_code_and_skips_regenerating_caption(conn, archive_dir, tmp_path):
-    src = _png(tmp_path / "shot.png")
+    src = make_png(tmp_path / "shot.png")
     first = FakeCaptioner("第一版描述")
     second = FakeCaptioner("不该被用到")
 
@@ -96,7 +66,7 @@ def test_duplicate_image_reuses_code_and_skips_regenerating_caption(conn, archiv
 
 
 def test_duplicate_image_without_caption_gets_one_later(conn, archive_dir, tmp_path):
-    src = _png(tmp_path / "shot.png")
+    src = make_png(tmp_path / "shot.png")
     media.register_standalone_image(conn, archive_dir, src)  # 先不入 caption
     assert conn.execute("SELECT caption FROM images").fetchone()["caption"] is None
 
@@ -109,7 +79,7 @@ def test_duplicate_image_without_caption_gets_one_later(conn, archive_dir, tmp_p
 
 
 def test_caption_failure_does_not_block_registration(conn, archive_dir, tmp_path):
-    src = _png(tmp_path / "shot.png")
+    src = make_png(tmp_path / "shot.png")
     fake = FakeCaptioner(error=RuntimeError("模型超时"))
 
     r = media.register_standalone_image(conn, archive_dir, src, captioner=fake)
@@ -124,7 +94,7 @@ def test_caption_failure_does_not_block_registration(conn, archive_dir, tmp_path
 
 def test_image_single_project_not_reparented(conn, archive_dir, tmp_path):
     """单归属：重复登记换个项目名，不改已定的主项目。"""
-    src = _png(tmp_path / "shot.png")
+    src = make_png(tmp_path / "shot.png")
     media.register_standalone_image(conn, archive_dir, src, project="浮标项目")
     media.register_standalone_image(conn, archive_dir, src, project="别的项目")
 
@@ -134,7 +104,7 @@ def test_image_single_project_not_reparented(conn, archive_dir, tmp_path):
 
 
 def test_image_project_tags(conn, archive_dir, tmp_path):
-    src = _png(tmp_path / "shot.png")
+    src = make_png(tmp_path / "shot.png")
     media.register_standalone_image(conn, archive_dir, src, project="浮标项目",
                                     tags=["测试", "资料"])
 
@@ -156,7 +126,7 @@ def test_unknown_ext_goes_to_archive_as_bin(conn, archive_dir, tmp_path):
 # ---------- 视频 ----------
 
 def test_register_video_assigns_vid_and_intro(conn, archive_dir, tmp_path):
-    src = _faux_video(tmp_path / "demo.mp4")
+    src = make_video(tmp_path / "demo.mp4")
 
     r = media.register_video(conn, archive_dir, src, project="浮标项目", intro="现场调试录像")
 
@@ -173,7 +143,7 @@ def test_register_video_assigns_vid_and_intro(conn, archive_dir, tmp_path):
 
 
 def test_duplicate_video_reuses_vid(conn, archive_dir, tmp_path):
-    src = _faux_video(tmp_path / "demo.mp4")
+    src = make_video(tmp_path / "demo.mp4")
     r1 = media.register_video(conn, archive_dir, src, intro="第一版简介")
     r2 = media.register_video(conn, archive_dir, src, intro="不该覆盖")
     assert r1.code == r2.code == "VID-0001"
@@ -183,7 +153,7 @@ def test_duplicate_video_reuses_vid(conn, archive_dir, tmp_path):
 
 
 def test_set_video_intro(conn, archive_dir, tmp_path):
-    media.register_video(conn, archive_dir, _faux_video(tmp_path / "demo.mp4"))
+    media.register_video(conn, archive_dir, make_video(tmp_path / "demo.mp4"))
     media.set_video_intro(conn, "VID-0001", "补上的简介")
     assert conn.execute("SELECT intro FROM videos").fetchone()["intro"] == "补上的简介"
 
@@ -194,7 +164,7 @@ def test_set_video_intro_unknown_code_raises(conn):
 
 
 def test_video_project_tags(conn, archive_dir, tmp_path):
-    media.register_video(conn, archive_dir, _faux_video(tmp_path / "demo.mp4"),
+    media.register_video(conn, archive_dir, make_video(tmp_path / "demo.mp4"),
                          project="浮标项目", tags=["测试"])
     tags = [r["name"] for r in conn.execute(
         "SELECT p.name FROM video_project_tags t JOIN projects p ON p.id=t.project_id "
@@ -205,9 +175,9 @@ def test_video_project_tags(conn, archive_dir, tmp_path):
 # ---------- 总览 ----------
 
 def test_overview_lists_media_with_projects(conn, archive_dir, tmp_path):
-    media.register_standalone_image(conn, archive_dir, _png(tmp_path / "a.png"),
+    media.register_standalone_image(conn, archive_dir, make_png(tmp_path / "a.png"),
                                     project="浮标项目", captioner=FakeCaptioner("甲图"))
-    media.register_video(conn, archive_dir, _faux_video(tmp_path / "v.mp4"),
+    media.register_video(conn, archive_dir, make_video(tmp_path / "v.mp4"),
                          project="浮标项目", intro="乙录像")
 
     ov = media.overview(conn)
@@ -301,27 +271,18 @@ def test_post_json_parses_body(monkeypatch):
 # ---------- 元数据：名称 / 宽高 / 时长 ----------
 
 def test_image_records_name_and_dimensions(conn, archive_dir, tmp_path):
-    src = _png(tmp_path / "shot.png")
+    src = make_png(tmp_path / "shot.png")
     media.register_standalone_image(conn, archive_dir, src)
     img = conn.execute("SELECT * FROM images").fetchone()
     assert img["name"] == "shot"
-    assert (img["width"], img["height"]) == (200, 100)
-
-
-def _mp4_with_mvhd(timescale=1000, duration=5000):
-    body = (b"\x00\x00\x00\x00" + b"\x00" * 8 + timescale.to_bytes(4, "big")
-            + duration.to_bytes(4, "big") + b"\x00" * 80)
-    mvhd = (len(body) + 8).to_bytes(4, "big") + b"mvhd" + body
-    moov = (len(mvhd) + 8).to_bytes(4, "big") + b"moov" + mvhd
-    ftyp = (16).to_bytes(4, "big") + b"ftyp" + b"mp42" + b"\x00\x00\x00\x00"
-    return ftyp + moov
+    assert (img["width"], img["height"]) == (160, 80)
 
 
 def test_video_records_name_and_duration(conn, archive_dir, tmp_path, monkeypatch):
     # 强制走「没有 ffprobe」的解析路径，免得本机 ffprobe 把结果盖掉（CI 上没这问题）
     monkeypatch.setattr(media.shutil, "which", lambda name: None)
     src = tmp_path / "demo.mp4"
-    src.write_bytes(_mp4_with_mvhd(timescale=1000, duration=5000))
+    src.write_bytes(make_mp4_with_mvhd(timescale=1000, duration=5000))
     r = media.register_video(conn, archive_dir, src)
     v = conn.execute("SELECT * FROM videos").fetchone()
     assert v["name"] == "demo"
@@ -330,14 +291,14 @@ def test_video_records_name_and_duration(conn, archive_dir, tmp_path, monkeypatc
 
 
 def test_video_duration_none_for_unparsable_bytes(conn, archive_dir, tmp_path):
-    media.register_video(conn, archive_dir, _faux_video(tmp_path / "x.mp4"))
+    media.register_video(conn, archive_dir, make_video(tmp_path / "x.mp4"))
     assert conn.execute("SELECT duration_seconds FROM videos").fetchone()[0] is None
 
 
 # ---------- recaption / 标签读取 ----------
 
 def test_recaption_regenerates(conn, archive_dir, tmp_path):
-    src = _png(tmp_path / "shot.png")
+    src = make_png(tmp_path / "shot.png")
     media.register_standalone_image(conn, archive_dir, src, captioner=FakeCaptioner("旧描述"))
     r = media.register_standalone_image(conn, archive_dir, src,
                                         captioner=FakeCaptioner("新描述"), recaption=True)
@@ -346,9 +307,9 @@ def test_recaption_regenerates(conn, archive_dir, tmp_path):
 
 
 def test_overview_shows_and_filters_tags(conn, archive_dir, tmp_path):
-    media.register_standalone_image(conn, archive_dir, _png(tmp_path / "a.png"),
+    media.register_standalone_image(conn, archive_dir, make_png(tmp_path / "a.png"),
                                     project="浮标项目", tags=["测试", "资料"])
-    media.register_standalone_image(conn, archive_dir, _png(tmp_path / "b.png", "B"),
+    media.register_standalone_image(conn, archive_dir, make_png(tmp_path / "b.png", "B"),
                                     project="浮标项目")
 
     tagged = media.overview(conn, tag="测试")
@@ -365,7 +326,7 @@ def test_live_caption_smoke(tmp_path):
     cap = capmod.captioner_from_env()
     if cap is None:
         pytest.skip("没有配置视觉模型密钥")
-    img = _png(tmp_path / "live.png", "SAMPLE 2026")
+    img = make_png(tmp_path / "live.png", "SAMPLE 2026")
     text = cap.describe(img.read_bytes(), ext=".png")
     assert isinstance(text, str) and len(text) >= 5
 
@@ -379,6 +340,6 @@ def test_standalone_caption_runs_outside_write_transaction(conn, archive_dir, tm
             seen.append(conn.in_transaction)
             return "描述"
 
-    media.register_standalone_image(conn, archive_dir, _png(tmp_path / "x.png"),
+    media.register_standalone_image(conn, archive_dir, make_png(tmp_path / "x.png"),
                                     captioner=Probe())
     assert seen == [False]

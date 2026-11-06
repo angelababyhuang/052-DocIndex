@@ -131,11 +131,13 @@ def test_cli_index_dry_run_counts_units(tmp_path, monkeypatch, capsys, db_path):
 class _FakeWeKnora:
     def __init__(self):
         self.searched = None
+        self.tag_names = None
 
     def find_kb(self, name):
         return "kb-1"
 
     def tag_ids_for(self, kb_id, names):
+        self.tag_names = list(names)
         return ["t-1"]
 
     def search(self, query, kb_ids, tag_ids=(), match_count=5):
@@ -162,3 +164,11 @@ def test_cli_search_missing_kb_exits(tmp_path, monkeypatch, capsys, db_path):
     with pytest.raises(SystemExit) as ei:
         run_cli(monkeypatch, "search", "x")
     assert "先跑 index" in str(ei.value)
+
+
+def test_cli_search_tag_accepts_bare_project_name(tmp_path, monkeypatch, capsys, db_path):
+    """`--tag 浮标项目` 与 `--tag 项目/浮标项目` 等价（和 media --tag 同一口径）。"""
+    fake = _FakeWeKnora()
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+    run_cli(monkeypatch, "search", "连杆间隙", "--tag", "浮标项目")
+    assert fake.tag_names == ["项目/浮标项目"]

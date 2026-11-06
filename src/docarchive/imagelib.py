@@ -43,7 +43,7 @@ def image_ref(code: str) -> str:
     return "{{" + code + "}}"
 
 
-def _norm_ext(ext: str | None) -> str:
+def normalize_ext(ext: str | None) -> str:
     if not ext:
         return ".bin"
     ext = ext.lower()
@@ -52,7 +52,7 @@ def _norm_ext(ext: str | None) -> str:
 
 def _master_path(archive_dir: str | Path, subdir: str, code: str,
                  ext: str | None) -> tuple[str, Path]:
-    rel = f"{subdir}/{code}{_norm_ext(ext)}"
+    rel = f"{subdir}/{code}{normalize_ext(ext)}"
     dest = Path(archive_dir) / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
     return rel, dest
@@ -105,7 +105,7 @@ def register_image(conn: sqlite3.Connection, archive_dir: str | Path, data: byte
     if row:
         return RegisteredImage(row["id"], row["code"], False)
 
-    ext = _norm_ext(ext or (Path(original_name).suffix if original_name else None))
+    ext = normalize_ext(ext or (Path(original_name).suffix if original_name else None))
     code = db.next_code(conn, "IMG")
     rel = store_master(archive_dir, IMAGES_SUBDIR, code, ext, data)
     width, height = _image_size(data)
@@ -120,12 +120,12 @@ def register_image(conn: sqlite3.Connection, archive_dir: str | Path, data: byte
 
 def ensure_caption(conn: sqlite3.Connection, image_id: int, data: bytes,
                    ext: str | None = None, captioner: Captioner | None = None,
-                   force: bool = False, commit: bool = True) -> CaptionResult:
+                   force: bool = False) -> CaptionResult:
     """给图片补一条 caption：已有就复用，没有（或 force）才调模型。
 
     模型/网络失败只回执错误，不抛——描述是增强字段，不能挡住图片入库。
-    默认生成后立刻 commit：批量补描述时，下一张图的 HTTP 不该落在写事务里
-    （否则一次几十秒的请求会一直占着 SQLite 写锁）。
+    不 commit：事务边界归调用方（和其他写函数一致）。批量补描述时记得每张提交，
+    否则下一张的 HTTP 会落在写事务里、一直占着 SQLite 写锁。
     """
     row = conn.execute("SELECT caption FROM images WHERE id=?", (image_id,)).fetchone()
     existing = (row["caption"] or "").strip() if row else ""
@@ -140,6 +140,4 @@ def ensure_caption(conn: sqlite3.Connection, image_id: int, data: bytes,
     if not text:
         return CaptionResult(existing or None, "模型返回了空描述")
     conn.execute("UPDATE images SET caption=? WHERE id=?", (text, image_id))
-    if commit:
-        conn.commit()
     return CaptionResult(text, generated=True)
