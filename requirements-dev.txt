@@ -1,4 +1,5 @@
 # 团队文档归档系统 — 测试依赖
 
 pytest>=8.0
+openpyxl>=3.1          # 测试里现造 xlsx 样例
 Pillow>=10.1           # 测试里现造图片样例（OCR / 内嵌图；load_default(size=) 要 10.1+）

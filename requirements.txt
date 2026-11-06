@@ -7,7 +7,9 @@
 # anydoc 的 PyPI 版只支持到 Python 3.10，3.11+（含 CI 的 3.12）装不上；
 # 那条环境里 fingerprint 的跨平台兜底改走 markitdown（见 fingerprint._markdown_fp）
 anydoc>=0.0.0; python_version < "3.11"   # textutil 不可用时的正文指纹复算
-markitdown>=0.1.5      # 文本型 PDF / xlsx → markdown
+# markitdown 的转换器按格式分组，基础包不含任何格式的依赖：docx 要 mammoth、
+# pdf 要 pdfminer-six、xlsx 要 pandas+openpyxl，缺了就静默降级/报错
+markitdown[docx,pdf,xlsx]>=0.1.5   # 文本型 PDF / xlsx → markdown、docx 指纹兜底
 python-pptx>=1.0       # pptx 读文本/表格/图表/图片（pandoc 无 pptx reader）
 PyMuPDF>=1.24          # PDF 文字层判定 + 逐页渲染给 OCR
 rapidocr-onnxruntime>=1.4   # 扫描版 PDF 离线 OCR（模型随包，不联网）
