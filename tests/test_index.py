@@ -1,8 +1,8 @@
 """票 #15：WeKnora 派生索引接入。"""
 import pytest
+from support import make_pending, make_video
 
 from docarchive import archive, index, media
-from support import make_pending, make_video
 
 
 def _archived_doc(conn, archive_dir, tmp_path, *, title="连杆方案", category="测试"):

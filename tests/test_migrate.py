@@ -104,6 +104,7 @@ def test_migrate_does_not_modify_source(src_db, dst_conn):
 
 def test_sha256_and_name_key_match_014_semantics():
     import hashlib
+
     from docarchive import fingerprint
     assert fingerprint.sha256_bytes(b"hello") == hashlib.sha256(b"hello").hexdigest()
     assert fingerprint.norm_text("a   b\n c") == "a b c"

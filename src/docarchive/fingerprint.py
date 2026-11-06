@@ -99,8 +99,8 @@ def compute_text_fp_from_bytes(data: bytes, ext: str) -> str | None:
             return text_fp_of_plain(data)
         # 文本型（docx/pdf 等）需要落盘给 textutil/anydoc，走临时文件
         if ext in TEXT_EXTS or ext in ANYDOC_EXTS:
-            import tempfile
             import os
+            import tempfile
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tf:
                 tf.write(data)
                 tmp = tf.name

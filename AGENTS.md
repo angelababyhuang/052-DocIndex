@@ -19,5 +19,6 @@ single-context 布局：`GLOSSARY.md` 与 `docs/adr/` 放在仓库根。见 `doc
 ## 开发
 
 - 本机 Python 用 anaconda（`/Applications/anaconda3/bin/python3`，3.10）；CI 用系统 Python 3.12。
-- 跑测试：`python -m pytest`。CLI：`python -m docarchive <命令>`（命令见 `--help`）。
+- 跑检查：`./check.sh`（ruff + pytest + compileall，CI 也走它）。CLI：`python -m docarchive <命令>`（命令见 `--help`）。
+- WeKnora 接口契约与实测坑：`docs/weknora-api.md`（改 `weknora.py` / `index.py` 前先读它，别重新去翻网页文档）。
 - 运行时依赖见 `requirements.txt`，测试依赖见 `requirements-dev.txt`。

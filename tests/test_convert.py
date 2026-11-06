@@ -11,9 +11,9 @@ import shutil
 import subprocess
 
 import pytest
+from support import make_pending, make_png
 
 from docarchive import archive, convert, imagelib
-from support import make_pending, make_png
 
 HAS_PANDOC = shutil.which("pandoc") is not None
 HAS_PPTX = importlib.util.find_spec("pptx") is not None

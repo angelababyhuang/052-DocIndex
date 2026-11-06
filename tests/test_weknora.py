@@ -1,7 +1,7 @@
 """票 #15：WeKnora 客户端（不联网，_request 打桩）。"""
+import io
 import json
 import urllib.error
-import io
 
 import pytest
 

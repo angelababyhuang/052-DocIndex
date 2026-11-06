@@ -4,10 +4,12 @@ import io
 import json
 import os
 import urllib.error
-import pytest
 
-from docarchive import caption as capmod, env, media
+import pytest
 from support import make_mp4_with_mvhd, make_png, make_video
+
+from docarchive import caption as capmod
+from docarchive import env, media
 
 
 class FakeCaptioner:

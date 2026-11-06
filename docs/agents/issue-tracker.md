@@ -43,3 +43,14 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
 - **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+
+## 结票约定（本仓库实践）
+
+关一张实现票时按这个顺序做，别自己发明格式（从 #10–#19 的实际提交里固化的）：
+
+1. 写结票记录 `.scratch/doc-archive/tickets/done-<票号>.md`：验收标准逐条打勾、实现要点、真机/CI 验证结果、评审后修掉的问题。
+2. 把这份记录原样发成票的评论：`gh issue comment <票号> -F .scratch/doc-archive/tickets/done-<票号>.md`。
+3. 再发一句话评论概括交付（回看历史时先看到的是这一条）。
+4. `gh issue close <票号> --reason completed`。
+5. 回写地图 #3：`Decisions so far` 追加一条（一行，带票链接与关键取舍）；`Not yet specified` 里已落定的条目挪进「已落定（供查）」。
+6. 结票记录单独提交：`chore: ticket <票号> completion note`（代码提交里不夹带）。

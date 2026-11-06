@@ -1,0 +1,14 @@
+# 工具配置（本项目不是可安装包，只放检查工具的配置）
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# 只开能确定性判定的规则：真 bug（未定义名、未用 import、语法级错误）+ import 排序。
+# 不启用 BLE001/S110/PLW1510 —— 本仓库大量「优雅降级」的 try/except 与不带 check 的
+# 子进程调用是故意的（见 ADR-0001/0002/0003），全量规则会把它们变成噪声。
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试里为了造样例会用到「未使用」的解包变量
+"tests/*" = ["F841"]

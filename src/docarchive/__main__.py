@@ -6,8 +6,17 @@ import argparse
 import contextlib
 from pathlib import Path
 
-from docarchive import (archive, caption, convert, db, index, ingest, media,
-                       migrate, weknora)
+from docarchive import (
+    archive,
+    caption,
+    convert,
+    db,
+    index,
+    ingest,
+    media,
+    migrate,
+    weknora,
+)
 from docarchive.env import merged
 
 DEFAULT_DB = Path("data/truth.db")
