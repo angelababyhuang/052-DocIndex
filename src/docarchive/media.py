@@ -54,8 +54,8 @@ def resolve_image(conn: sqlite3.Connection | None, archive_dir: str | Path,
         return ImageLocation(code, problem="真相源不可用")
     try:
         row = conn.execute("SELECT path FROM images WHERE code=?", (code,)).fetchone()
-    except sqlite3.Error as e:  # 库损坏/表缺失：图回指降级，不影响文本命中
-        return ImageLocation(code, problem=f"真相源不可用：{type(e).__name__}")
+    except sqlite3.Error as e:  # 库损坏/旧 schema：图回指降级，不影响文本命中
+        return ImageLocation(code, problem=f"真相源不可用：{e}")
     if row is None:
         return ImageLocation(code, problem="未登记")
     rel = (row[0] or "").strip()  # 只有一列，用下标兼容未设 row_factory 的连接

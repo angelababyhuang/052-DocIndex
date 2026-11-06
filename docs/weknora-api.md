@@ -64,8 +64,9 @@ manual 推的 markdown 里写 `{{IMG-0001}}`，分块正文和 `knowledge-search
 `content` 里都是原样的 `{{IMG-0001}}`。`SearchResult` 还带 `id`（分块 id）、
 `knowledge_id`、`start_at` / `end_at`、`chunk_type`、`knowledge_custom_metadata`。
 所以 chunk ↔ 图片的映射可以做两层：正文标记（分块级）+ knowledge 元数据
-（文档级兜底）。若将来标记不再保留，退路是用 `id` + `GET /api/v1/chunks/:kid`
-的 `start_at`/`end_at` 做偏移映射。
+（文档级兜底）。若将来标记不再保留，退路是用命中里的 `id` + `GET /api/v1/chunks/:knowledge_id`
+（按分块 id 则用 `GET /api/v1/chunks/by-id/:id`）的 `start_at`/`end_at` 做偏移映射；
+本仓库目前没有走这条路（ADR-0005）。
 
 ## 需要知道的限制
 

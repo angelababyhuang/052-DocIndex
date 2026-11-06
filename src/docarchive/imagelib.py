@@ -57,18 +57,19 @@ def ref_codes(text: str) -> tuple[str, ...]:
     只认带花括号的引用：正文里裸写的编号是「提到」不是「引用这张图」，
     拿来当 chunk↔图片映射会把无关的图挂上去（#21）。
     """
-    return _dedupe(_REF_RE.findall(text or ""))
+    return unique_codes(_REF_RE.findall(text or ""))
 
 
-def codes_in(text: str) -> tuple[str, ...]:
+def all_codes(text: str) -> tuple[str, ...]:
     """文本里任意位置的 IMG 编号（去重、保序）。
 
     给「图片清单」这种只有编号、没有花括号的地方用；正文回指请用 ref_codes。
     """
-    return _dedupe(_CODE_RE.findall(text or ""))
+    return unique_codes(_CODE_RE.findall(text or ""))
 
 
-def _dedupe(codes: Iterable[str]) -> tuple[str, ...]:
+def unique_codes(codes: Iterable[str]) -> tuple[str, ...]:
+    """编号去重、保序（图片清单与正文回指共用）。"""
     seen: list[str] = []
     for code in codes:
         if code not in seen:

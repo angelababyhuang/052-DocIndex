@@ -6,7 +6,13 @@ import os
 import urllib.error
 
 import pytest
-from support import FakeCaptioner, make_mp4_with_mvhd, make_png, make_video
+from support import (
+    FakeCaptioner,
+    make_mp4_with_mvhd,
+    make_png,
+    make_video,
+    register_fake_image,
+)
 
 from docarchive import caption as capmod
 from docarchive import env, media
@@ -361,16 +367,8 @@ def test_standalone_caption_runs_outside_write_transaction(conn, archive_dir, tm
 
 # ---------- #21：从 IMG 编号解析图片母本 ----------
 
-def _register_fake_image(conn, archive_dir, data=b"fake-png-bytes"):
-    from docarchive import imagelib
-
-    reg = imagelib.register_image(conn, archive_dir, data, ext=".png")
-    conn.commit()
-    return reg
-
-
 def test_resolve_image_returns_absolute_master_path(conn, archive_dir):
-    reg = _register_fake_image(conn, archive_dir)
+    reg = register_fake_image(conn, archive_dir)
     ref = media.resolve_image(conn, archive_dir, reg.code)
     assert ref.code == reg.code
     assert ref.problem is None
@@ -378,7 +376,7 @@ def test_resolve_image_returns_absolute_master_path(conn, archive_dir):
 
 
 def test_resolve_image_reports_missing_master(conn, archive_dir):
-    reg = _register_fake_image(conn, archive_dir)
+    reg = register_fake_image(conn, archive_dir)
     (archive_dir / f"images/{reg.code}.png").unlink()
     ref = media.resolve_image(conn, archive_dir, reg.code)
     assert ref.location is None
@@ -398,7 +396,7 @@ def test_resolve_image_reports_missing_truth_source(archive_dir):
 
 
 def test_resolve_image_passes_remote_path_through(conn, archive_dir):
-    reg = _register_fake_image(conn, archive_dir)
+    reg = register_fake_image(conn, archive_dir)
     conn.execute("UPDATE images SET path=? WHERE code=?",
                  ("https://cos.example.com/IMG-0001.png", reg.code))
     conn.commit()
@@ -407,7 +405,7 @@ def test_resolve_image_passes_remote_path_through(conn, archive_dir):
 
 
 def test_resolve_image_reports_empty_path(conn, archive_dir):
-    reg = _register_fake_image(conn, archive_dir)
+    reg = register_fake_image(conn, archive_dir)
     conn.execute("UPDATE images SET path=NULL WHERE code=?", (reg.code,))
     conn.commit()
     ref = media.resolve_image(conn, archive_dir, reg.code)

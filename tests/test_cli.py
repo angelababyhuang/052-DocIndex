@@ -2,7 +2,13 @@
 import sys
 
 import pytest
-from support import FakeCaptioner, make_pending, make_png, make_video
+from support import (
+    FakeCaptioner,
+    make_pending,
+    make_png,
+    make_video,
+    register_fake_image,
+)
 
 from docarchive import __main__ as cli
 
@@ -258,14 +264,14 @@ def test_cli_search_tag_accepts_bare_project_name(tmp_path, monkeypatch, capsys,
 # ---------- #21：检索结果回指内嵌图 ----------
 
 def _seed_image(db_path, archive_dir, data=b"fake-png-bytes"):
+    """CLI 用例里登记一张假图并返回编号（连接管理留在测试侧）。"""
     from docarchive import db as appdb
-    from docarchive import imagelib
 
     conn = appdb.connect(db_path)
-    reg = imagelib.register_image(conn, archive_dir, data, ext=".png")
-    conn.commit()
-    conn.close()
-    return reg.code
+    try:
+        return register_fake_image(conn, archive_dir, data).code
+    finally:
+        conn.close()
 
 
 class _ImageHitWeKnora(_FakeWeKnora):
@@ -296,7 +302,7 @@ def test_cli_search_prints_image_master_path(tmp_path, monkeypatch, capsys, db_p
 
 
 def test_cli_search_prints_manifest_only_images(tmp_path, monkeypatch, capsys, db_path):
-    """分块正文没带标记时，靠知识条目的图片清单补文档级图片（标成「文档图片」）。"""
+    """分块正文没带标记时，靠知识条目的图片清单补文档级图片（标成「清单图片」）。"""
     archive_dir = db_path.parent / "archive"
     _seed_converted_doc(db_path, archive_dir)
     code = _seed_image(db_path, archive_dir)
@@ -310,7 +316,7 @@ def test_cli_search_prints_manifest_only_images(tmp_path, monkeypatch, capsys, d
     run_cli(monkeypatch, "search", "连杆间隙", "--db", str(db_path))
 
     out = capsys.readouterr().out
-    assert f"文档图片 {code}" in out
+    assert f"清单图片 {code}" in out
     assert str((archive_dir / f"images/{code}.png").resolve()) in out
 
 
@@ -345,7 +351,7 @@ def test_cli_search_without_truth_source_still_prints_hits(tmp_path, monkeypatch
 
     out = capsys.readouterr().out
     assert "连杆方案" in out and "IMG-0001" in out
-    assert "真相源" in out
+    assert "真相源不可用" in out  # 每条图给原因，不额外打一行全局提示
     assert not missing.exists()  # 搜索不该凭空建库
 
 
@@ -390,3 +396,38 @@ def test_cli_index_dry_run_shows_document_image_count(tmp_path, monkeypatch, cap
     run_cli(monkeypatch, "index", "--dry-run", "--db", str(db_path))
     out = capsys.readouterr().out
     assert "图片 2" in out
+
+
+def test_cli_search_prints_image_unit_own_master(tmp_path, monkeypatch, capsys, db_path):
+    """命中图片条目（caption）时，条目本身就是这张图，直接给母本。"""
+    archive_dir = db_path.parent / "archive"
+    _seed_converted_doc(db_path, archive_dir)
+    code = _seed_image(db_path, archive_dir)
+    fake = _ImageHitWeKnora({
+        "knowledge_title": f"图片 {code}", "score": 0.9,
+        "content": "一张连杆间隙测量截图",
+    })
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+
+    run_cli(monkeypatch, "search", "连杆间隙", "--db", str(db_path))
+
+    out = capsys.readouterr().out
+    assert f"本图 {code}" in out
+    assert str((archive_dir / f"images/{code}.png").resolve()) in out
+
+
+def test_cli_search_reports_truncated_manifest(tmp_path, monkeypatch, capsys, db_path):
+    archive_dir = db_path.parent / "archive"
+    _seed_converted_doc(db_path, archive_dir)
+    code = _seed_image(db_path, archive_dir)
+    fake = _ImageHitWeKnora({
+        "knowledge_title": "连杆方案", "score": 0.9,
+        "content": "这一段没有图片标记",
+        "knowledge_custom_metadata": f"图片: {code}\n图片数: 150",
+    })
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+
+    run_cli(monkeypatch, "search", "连杆间隙", "--db", str(db_path))
+
+    out = capsys.readouterr().out
+    assert "只列了前 1 张，共 150 张" in out

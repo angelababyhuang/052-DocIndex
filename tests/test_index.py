@@ -2,7 +2,7 @@
 import pytest
 from support import make_pending, make_video
 
-from docarchive import archive, index, media
+from docarchive import archive, index, manifest, media
 
 
 def _archived_doc(conn, archive_dir, tmp_path, *, title="连杆方案", category="测试",
@@ -191,31 +191,37 @@ def test_document_without_images_has_empty_manifest(conn, archive_dir, tmp_path)
     _archived_doc(conn, archive_dir, tmp_path)
     doc = index.collect_units(conn, archive_dir)[0]
     assert doc.images == ()
-    assert index.manifest_fields(doc.images) == {}
+    assert manifest.encode(doc.images) == {}
 
 
-def test_manifest_fields_join_codes_for_custom_metadata():
-    assert index.manifest_fields(("IMG-0001", "IMG-0002")) == {
+def test_manifest_encode_joins_codes_for_custom_metadata():
+    assert manifest.encode(("IMG-0001", "IMG-0002")) == {
         "图片": "IMG-0001,IMG-0002",
     }
 
 
-def test_manifest_fields_truncate_long_lists_and_record_total():
+def test_manifest_encode_truncates_long_lists_and_records_total():
     """custom_metadata 的值有 1000 字符上限：截断并带总数，别让整条写入失败。"""
     codes = tuple(f"IMG-{i:04d}" for i in range(1, 200))
-    fields = index.manifest_fields(codes)
-    assert len(fields["图片"]) <= index.MAX_MANIFEST_CHARS
+    fields = manifest.encode(codes)
+    assert len(fields["图片"]) <= manifest.MAX_MANIFEST_CHARS
     assert fields["图片"].startswith("IMG-0001,IMG-0002")
     assert fields["图片数"] == 199
     assert "IMG-0199" not in fields["图片"]
 
 
-def test_manifest_codes_roundtrips_search_field():
-    assert index.manifest_codes("图片: IMG-0001,IMG-0002") == ("IMG-0001", "IMG-0002")
-    assert index.manifest_codes({"图片": "IMG-0003"}) == ("IMG-0003",)
-    assert index.manifest_codes("来源: 052") == ()  # 别的字段里出现编号不算清单
-    assert index.manifest_codes(None) == ()
-    assert index.manifest_codes({"图片": 3}) == ()
+def test_manifest_decode_reads_search_field():
+    assert manifest.decode("图片: IMG-0001,IMG-0002").codes == ("IMG-0001", "IMG-0002")
+    assert manifest.decode({"图片": "IMG-0003"}).codes == ("IMG-0003",)
+    assert manifest.decode("来源: 052").codes == ()  # 别的字段里出现编号不算清单
+    assert manifest.decode(None).codes == ()
+    assert manifest.decode({"图片": 3}).codes == ()
+
+
+def test_manifest_decode_reads_truncated_total():
+    decoded = manifest.decode("图片: IMG-0001\n图片数: 150")
+    assert decoded.codes == ("IMG-0001",)
+    assert decoded.total == 150
 
 
 def test_index_units_writes_image_manifest_after_create(conn, archive_dir, tmp_path):

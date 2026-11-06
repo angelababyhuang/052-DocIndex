@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from docarchive import ingest
+from docarchive import imagelib, ingest
 
 
 class FakeCaptioner:
@@ -62,3 +62,10 @@ def make_pending(conn, src: Path, file_name: str | None = None,
     ingest.register(conn, source_type, str(src), None, file_name or src.name,
                     len(data), hashlib.sha256(data).hexdigest(), None)
     return conn.execute("SELECT * FROM occurrences ORDER BY id DESC LIMIT 1").fetchone()
+
+
+def register_fake_image(conn, archive_dir, data=b"fake-png-bytes"):
+    """登记一张假图片（不依赖 Pillow），返回编号——图片回指/母本解析用例共用。"""
+    reg = imagelib.register_image(conn, archive_dir, data, ext=".png")
+    conn.commit()
+    return reg

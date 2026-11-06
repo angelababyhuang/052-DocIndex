@@ -277,18 +277,16 @@ def cmd_search(args):
         print("没搜到（索引可能还没解析完，或关键词不合适）")
         return
     conn = _open_truth_readonly(args.db)
+    archive_dir = _archive_dir(args.db)
     try:
-        images = [search.hit_image_codes(h) for h in hits]
-        if conn is None and any(i.chunk or i.knowledge for i in images):
-            print(f"（未找到真相源 {args.db}，只显示 IMG 编号、不解析母本）")
         print(f"命中 {len(hits)} 条：")
-        for h, imgs in zip(hits, images):
+        for h in hits:
             title = h.get("knowledge_title") or h.get("title") or "-"
             score = h.get("score")
             score_s = f"{score:.3f}" if isinstance(score, (int, float)) else "-"
             snippet = " ".join((h.get("content") or "").split())[:160]
             print(f"  [{score_s}] {title}：{snippet}")
-            _print_hit_images(conn, _archive_dir(args.db), imgs)
+            _print_hit_images(conn, archive_dir, search.hit_image_codes(h))
     finally:
         if conn is not None:
             conn.close()
@@ -296,10 +294,20 @@ def cmd_search(args):
 
 def _print_hit_images(conn, archive_dir: Path, imgs: search.HitImages) -> None:
     """每条命中下打印图片母本位置；解析不到也打印编号+原因（文本命中不受影响）。"""
+    seen: set[str] = set()
+    for code in imgs.unit_image:
+        print("    " + _format_image(media.resolve_image(conn, archive_dir, code), "本图"))
+        seen.add(code)
     for code in imgs.chunk:
-        print("    " + _format_image(media.resolve_image(conn, archive_dir, code), "图片"))
+        if code not in seen:
+            print("    " + _format_image(media.resolve_image(conn, archive_dir, code), "图片"))
+            seen.add(code)
     for code in imgs.extra():
-        print("    " + _format_image(media.resolve_image(conn, archive_dir, code), "文档图片"))
+        if code not in seen:
+            print("    " + _format_image(media.resolve_image(conn, archive_dir, code), "清单图片"))
+            seen.add(code)
+    if imgs.knowledge_total and imgs.knowledge_total > len(imgs.knowledge):
+        print(f"    （图片清单只列了前 {len(imgs.knowledge)} 张，共 {imgs.knowledge_total} 张）")
 
 
 def _format_image(ref: media.ImageLocation, label: str) -> str:

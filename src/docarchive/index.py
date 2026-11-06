@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Protocol
 
-from docarchive import imagelib
+from docarchive import imagelib, manifest
 from docarchive.archive import CATEGORIES
 
 # 标签维度前缀
@@ -27,13 +27,6 @@ TAG_PROJECT = "项目"
 TAG_CATEGORY = "类别"
 TAG_IMAGE = "图片"
 TAG_VIDEO = "视频"
-
-# 知识条目「图片清单」：写进 WeKnora knowledge 的 custom_metadata（#21）。
-# 检索结果里以拍平文本 `图片: IMG-0001,IMG-0002` 返回（weknora-api.md 有实测记录）。
-IMAGE_MANIFEST_KEY = "图片"
-IMAGE_COUNT_KEY = "图片数"
-# WeKnora 校验：custom_metadata 的值 ≤1000 字符（超了整条写入 500）
-MAX_MANIFEST_CHARS = 1000
 
 
 @dataclass(frozen=True)
@@ -123,47 +116,6 @@ def planned_tags(units: Iterable[Unit]) -> tuple[str, ...]:
     return tuple(seen)
 
 
-def manifest_fields(codes: Iterable[str]) -> dict[str, object]:
-    """把正文里的 IMG 编号拼成 custom_metadata 字段（空清单返回 {}，不写）。
-
-    值超长就截断并带 `图片数`：WeKnora 对值有 1000 字符上限，超了整个 PUT 会 500。
-    截断只影响「文档级清单」，chunk 正文里的标记不受影响。
-    """
-    codes = list(dict.fromkeys(codes))
-    if not codes:
-        return {}
-    kept: list[str] = []
-    length = 0
-    for code in codes:
-        extra = len(code) + (1 if kept else 0)
-        if length + extra > MAX_MANIFEST_CHARS:
-            break
-        kept.append(code)
-        length += extra
-    fields: dict[str, object] = {IMAGE_MANIFEST_KEY: ",".join(kept)}
-    if len(kept) < len(codes):
-        fields[IMAGE_COUNT_KEY] = len(codes)
-    return fields
-
-
-def manifest_codes(value: object) -> tuple[str, ...]:
-    """从检索结果的知识条目元数据里取图片清单（兼容拍平文本与 JSON 对象）。
-
-    WeKnora 的 `knowledge_custom_metadata` 实测是 `键: 值` 文本、多字段换行；
-    对象形状是防御性的（接口将来变结构化时不用改调用点）。
-    """
-    if isinstance(value, Mapping):
-        raw = value.get(IMAGE_MANIFEST_KEY)
-        return imagelib.codes_in(raw) if isinstance(raw, str) else ()
-    if not isinstance(value, str):
-        return ()
-    for line in value.splitlines():
-        key, sep, rest = line.partition(":")
-        if sep and key.strip() == IMAGE_MANIFEST_KEY:
-            return imagelib.codes_in(rest)
-    return ()
-
-
 def index_units(units: Iterable[Unit], client: IndexClient, *, kb_name: str,
                 embedding_model_id: str | None = None,
                 rebuild: bool = False) -> IndexReport:
@@ -191,7 +143,7 @@ def index_units(units: Iterable[Unit], client: IndexClient, *, kb_name: str,
         kid = client.create_knowledge(kb_id, unit.title, unit.content,
                                       [tag_ids[t] for t in unit.tags])
         kids.append(kid)
-        fields = manifest_fields(unit.images)
+        fields = manifest.encode(unit.images)
         if not fields:
             continue
         try:

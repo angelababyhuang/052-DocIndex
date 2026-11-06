@@ -36,10 +36,12 @@
 ## 决策
 
 **1. 索引入口：把「图片清单」写进 knowledge 的 `custom_metadata`。**
-`index.collect_units` 从**实际要推送的 md** 里抽 `{{IMG-####}}`（去重保序），
-带上 `Unit.images`；`index.index_units` 在创建知识拿到 `knowledge_id` 后，用
-`PUT /api/v1/knowledge/:id` 写 `custom_metadata.图片 = "IMG-0001,IMG-0002,…"`。
-没有内嵌图的文档不写（少一次请求、也少一份噪声元数据）。
+`index.collect_units` 产出的文档条目带 `Unit.images`（具体在 `_document_units`
+里从**实际要推送的 md** 抽 `{{IMG-####}}`，去重保序）；`index.index_units` 在创建
+知识拿到 `knowledge_id` 后，用 `PUT /api/v1/knowledge/:id` 写
+`custom_metadata.图片 = "IMG-0001,IMG-0002,…"`。没有内嵌图的文档不写（少一次
+请求、也少一份噪声元数据）。编码/解析格式只定义一处（`manifest.py`），写
+（index）和读（search）共用。
 
 清单从 md 里取而不是从 `document_images` 里取：清单描述的是**这条知识条目正文
 引用了哪些图**，md 的标记才是索引里真实存在的东西；`document_images` 仍是
@@ -50,8 +52,13 @@
 
 - `chunk`：命中 `content` 里的 `{{IMG-####}}`。这是分块级的精确回指——正文写了
   哪张图，就是哪张图；裸写的编号（比如图片条目正文里的 `IMG-0001`）不算引用。
+  WeKnora 的上下文补齐会把相邻块并进 `content`，其中的标记也算这条结果的图——
+  它们仍是同一知识条目的上下文，打印出来不会误导；要精确到「原始检索块」得
+  另存偏移映射，本票不做。
 - `knowledge`：`knowledge_custom_metadata` 里的清单。它只到文档级，用来覆盖
-  「分块边界刚好把标记切走」的情况；打印时对清单里多出来的图单独标「文档图片」。
+  「分块边界刚好把标记切走」的情况；打印时对清单里多出来的图单独标「清单图片」。
+- `unit_image`：命中本身就是图片条目（标题 `图片 IMG-0001`）时，条目就是那张图，
+  标「本图」走同一条母本解析——caption 命中也能回到母本。
 
 **3. 编号 → 母本走真相源，不把图片二进制上传 WeKnora。**
 `media.resolve_image` 查 `images.code → path`，相对路径按受管目录解析成绝对路径
@@ -74,13 +81,19 @@
 **5. 清单超长就截断并记总数。**
 `custom_metadata` 值上限 1000 字符，一个文档引用的图可能超过 100 个编号。超长时
 按顺序截断到装得下为止，并加 `图片数 = 原始总数`；分块正文里的标记不受截断影响，
-所以截断只损失「文档级兜底」，不影响分块级回指。
+所以截断只损失「文档级兜底」，不影响分块级回指。`图片数` 同样会出现在检索结果的
+`knowledge_custom_metadata` 里，CLI 在清单条数少于总数时打印
+`（图片清单只列了前 N 张，共 M 张）`，不把截断藏起来。
 
 ## 后果
 
 - 检索命中含图正文时，`search` 输出会多一行
   `图片 IMG-0001  /…/archive/images/IMG-0001.png`（清单里多出来的标
-  `文档图片`）；`python -m docarchive search` 因此需要读真相源，新增 `--db` 选项。
+  `清单图片`，图片条目自己标 `本图`）；`python -m docarchive search` 因此需要读
+  真相源，新增 `--db` 选项。`index --dry-run` 也会在文档条目后显示 `图片 N`，
+  方便先确认清单会带哪些图。
+- 「并打开」这一步交给调用方：CLI 打印母本绝对路径（spec §7.1 的承诺），不在
+  工具里拉起图片查看器；飞书/Web 入口要看图得等图片进 COS（见下一条）。
 - 索引每条**有内嵌图的文档**多一次 PUT；没有图就零额外请求。重建索引（`--rebuild`）
   会连同清单一起重建，不需要单独的台账。
 - WeKnora 的飞书渠道 / Web 前端**看不到图**：图片二进制不在 WeKnora 里。第一阶段
@@ -89,9 +102,8 @@
 - 清单会参与 WeKnora 的摘要生成与文档级模型上下文（`CustomMetadataText()` 的
   设计用途）；`图片: IMG-…` 对摘要来说是弱信息，但可接受。元数据变化会触发一次
   文档摘要刷新（WeKnora 行为），不阻塞入索引。
-- 截断的清单无法从 `search` 输出发现少了的编号：`图片数` 只在 `GET /knowledge/:id`
-  里能看到。要完整清单就去真相源查 `document_images` / md 标记——派生索引本来
-  就不承诺完整。
+- 截断的清单只提示总数，不补全：`search` 会说「共 M 张、只列了前 N 张」，剩下列表
+  去真相源查 `document_images` / md 标记——派生索引本来就不承诺完整。
 - 分块级回指依赖「标记原样保留在 chunk 正文里」。这条已实测（第 1 点），但不是
-  WeKnora 的书面契约；它一旦变化，退路是 `knowledge_id` + `GET /api/v1/chunks/:id`
+  WeKnora 的书面契约；它一旦变化，退路是 `knowledge_id` + `GET /api/v1/chunks/:knowledge_id`
   的 `start_at` / `end_at` 做偏移映射（本票不做，先在 `docs/weknora-api.md` 记下）。

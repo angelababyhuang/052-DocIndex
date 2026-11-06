@@ -47,3 +47,24 @@ def test_hit_images_extra_excludes_chunk_codes():
     got = search.hit_image_codes(hit)
     assert got.chunk == ("IMG-0001",)
     assert got.extra() == ("IMG-0002", "IMG-0003")
+
+
+def test_hit_image_codes_reads_truncated_total():
+    hit = {"knowledge_custom_metadata": "图片: IMG-0001,IMG-0002\n图片数: 150"}
+    got = search.hit_image_codes(hit)
+    assert got.knowledge == ("IMG-0001", "IMG-0002")
+    assert got.knowledge_total == 150
+
+
+def test_hit_image_codes_reads_image_unit_title():
+    """命中图片条目（caption）时，条目本身就是那张图，标题直接给出编号。"""
+    hit = {"knowledge_title": "图片 IMG-0007", "content": "一张连杆间隙测量截图"}
+    got = search.hit_image_codes(hit)
+    assert got.unit_image == ("IMG-0007",)
+    assert got.chunk == () and got.knowledge == ()
+
+
+def test_hit_image_codes_ignores_non_image_titles():
+    assert search.hit_image_codes({"knowledge_title": "方案里的 IMG-0001 说明"}).unit_image == ()
+    assert search.hit_image_codes({"knowledge_title": "图片 IMG-1"}).unit_image == ()
+    assert search.hit_image_codes({"knowledge_title": None}).unit_image == ()
