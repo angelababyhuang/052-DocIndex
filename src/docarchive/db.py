@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS images(
   caption TEXT,                       -- 图片描述（VLM 生成）
   width INTEGER,
   height INTEGER,
+  path TEXT,                          -- 二进制存储位置（文件系统路径或 COS URL）
   created_at TEXT DEFAULT (datetime('now','localtime')));
 
 -- 视频：独立顶层实体，VID-####，第一阶段人填简介
@@ -77,6 +78,8 @@ CREATE TABLE IF NOT EXISTS videos(
   source TEXT,
   intro TEXT,                         -- 人填简介
   duration_seconds REAL,
+  project_id INTEGER REFERENCES projects(id),  -- 主归属项目
+  path TEXT,                          -- 二进制存储位置（文件系统路径或 COS URL）
   created_at TEXT DEFAULT (datetime('now','localtime')));
 
 -- 文档↔图片 关联：区分内嵌/独立，内嵌记位置
@@ -105,7 +108,22 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate_columns(conn)
     return conn
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    """幂等列迁移：给既有库补上后加的列（images.path / videos.path / videos.project_id）。"""
+    def _cols(table: str) -> set[str]:
+        return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+    if "path" not in _cols("images"):
+        conn.execute("ALTER TABLE images ADD COLUMN path TEXT")
+    if "path" not in _cols("videos"):
+        conn.execute("ALTER TABLE videos ADD COLUMN path TEXT")
+    if "project_id" not in _cols("videos"):
+        conn.execute("ALTER TABLE videos ADD COLUMN project_id INTEGER REFERENCES projects(id)")
+    conn.commit()
 
 
 def next_code(conn: sqlite3.Connection, prefix: str, width: int = 4) -> str:
