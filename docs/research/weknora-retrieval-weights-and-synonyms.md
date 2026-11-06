@@ -3,7 +3,7 @@
 调研日期：2026-11-06
 调研问题：052 的 `search` 要支持「混合检索权重/阈值 + 同义词兜底」（spec §7.3，票 #22），动手前必须钉死：
 WeKnora 到底把哪些旋钮暴露给逐请求调用、RRF 权重能不能按请求改、有没有同义词/查询扩展能力、同义词表应该放在 052 真相源的哪里。
-固定版本：WeKnora **v0.9.0**（tag `f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7`；调研时 main 为 `e3fb2335`）。本机部署为 v0.9.x，线上只读实测见 §4.3。
+固定版本：WeKnora **v0.9.0**（tag `f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7`；调研时 main 为 `e3fb2335`）。本机部署实测为 **v0.8.0**（`GET /api/v1/system/info`：`version=0.8.0`、`commit_id=1edcd54`），v0.8.0 与 v0.9.0 在「逐请求覆盖」上有关键差异，见 §1.1。
 取证方式：仓库 `website-docs/` 与 Go 源码（固定 commit 链接）+ 本机 `GET /api/v1/tenants/kv/retrieval-config` 只读探测 + 052 现有代码。
 
 ---
@@ -12,14 +12,15 @@ WeKnora 到底把哪些旋钮暴露给逐请求调用、RRF 权重能不能按�
 
 | # | 结论 | 置信度 | 一手出处 |
 |---|---|---|---|
-| 1 | `knowledge-search` 逐请求可覆盖的召回参数只有 `vector_threshold`、`keyword_threshold`、`match_count`、`disable_keywords_match`、`disable_vector_match`、`rerank`；**没有 RRF 权重字段** | 已验证（源码） | [`SearchKnowledgeRequest`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/handler/session/types.go#L108-L123)、[`SearchParams`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/types/search.go#L259-L291) |
+| 1 | **v0.9.0 的** `knowledge-search` 逐请求可覆盖的召回参数只有 `vector_threshold`、`keyword_threshold`、`match_count`、`disable_keywords_match`、`disable_vector_match`、`rerank`；**没有 RRF 权重字段**（线上 v0.8.0 连这些覆盖都没有，见第 9 行） | 已验证（源码） | [`SearchKnowledgeRequest`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/handler/session/types.go#L108-L123)、[`SearchParams`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/types/search.go#L259-L291) |
 | 2 | 混合检索确实是**加权 RRF**，默认 `k=60`、向量权重 `0.7`、关键词权重 `0.3`；spec §7.3 的 0.7/0.3 有出处，**但这是租户级配置，不是逐请求参数** | 已验证（源码） | [`fuseWithRRF`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/application/service/knowledgebase_search_fusion.go#L170-L205)、[`RetrievalConfig.GetEffectiveRRFWeights`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/types/retrieval_config.go#L100-L115) |
 | 3 | 权重/`k` 只能改**空间级** `GET/PUT /api/v1/tenants/kv/retrieval-config`（GET Viewer、PUT Admin），PUT 是**整体替换**，作用域是整个租户（聊天、Agent、检索 API 共用） | 已验证（源码） | [路由](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/router/routes_auth_tenant.go#L87-L88)、[handler](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/handler/tenant.go#L1719-L1794) |
 | 4 | 本机实例的 retrieval config 当前全为 0/空（没有显式配置），因此实际生效的就是全部默认值（0.15 / 0.3 / 50 / 10 / 0.2 / 0.7 / 0.3 / k=60） | 已验证（真机只读） | 本文 §4.3 |
 | 5 | WeKnora **没有同义词/别名词典**，也没有「查询扩展」类 API；`tag_ids` 是过滤（`tag_id IN`），不是同义词扩展 | 已验证（源码 + 文档检索） | [`postgres/repository.go`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/application/repository/retriever/postgres/repository.go#L253-L265)；`website-docs` 全库无同义词章节 |
 | 6 | WeKnora 有一个**本地**查询扩展（去停用词、词序、短语抽取），但它只在聊天管线、召回不足时触发，且只走关键词；`knowledge-search` 没有设置该开关，不用它 | 已验证（源码，未做运行时验证） | [`query_expansion.go`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/application/service/chat_pipeline/query_expansion.go#L22-L50)、[`search.go`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/application/service/chat_pipeline/search.go#L140-L146) |
-| 7 | 关键词侧是 ParadeDB `content ||| ?`（**匹配任一词**），所以把同义词直接拼进一个查询串确实能扩大关键词召回；风险在向量侧查询被稀释 | 已验证（源码） | [`postgres/repository.go`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/application/repository/retriever/postgres/repository.go#L262-L265) |
+| 7 | 关键词侧是 ParadeDB `content ||| ?`（**匹配任一词**），所以把同义词直接拼进一个查询串确实能扩大关键词召回；风险在向量侧查询被稀释，且关键词路会带进弱相关的噪声，需要 rerank/阈值压掉 | 已验证（源码 + 真机） | [`postgres/repository.go`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/application/repository/retriever/postgres/repository.go#L262-L265) |
 | 8 | 052 真相源现在只有 `projects(name)`，没有别名列/表；同义词表要新加，且因为扩展在查询侧完成，**不需要重建索引** | 已验证（本仓库） | `src/docarchive/db.py#L11-L14`、`src/docarchive/index.py#L160-L182` |
+| 9 | **线上是 WeKnora v0.8.0**：`knowledge-search` 不认 `match_count` / 阈值 / `disable_*` / `rerank`，这些参数被静默忽略；`hybrid-search` 认阈值/开关/match_count（但没有 rerank）。v0.8.3+ 才给 `knowledge-search` 加上覆盖 | 已验证（真机 + v0.8.0 源码） | 本文 §1.1 |
 
 ---
 
@@ -27,7 +28,31 @@ WeKnora 到底把哪些旋钮暴露给逐请求调用、RRF 权重能不能按�
 
 - 代码链接全部固定在 **v0.9.0** tag：`f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7`。
 - v0.9.0 与调研时 main（`e3fb2335`）的检索相关文件抽查一致（`RetrievalConfig`、`SearchParams`、`fuseWithRRF` 均存在且字段相同）；本文以 v0.9.0 为准。
-- 线上实例版本为 v0.9.x；只做了 `GET /tenants/kv/retrieval-config`（只读、不打印凭据），没有写配置、没有建/删知识库。
+- 线上实例实测为 **v0.8.0**；只做了 `GET /tenants/kv/retrieval-config` 和临时知识库上的检索探测（只读配置、临时库用完即删），没有写配置、没有建/删线上正式知识库。
+- 运行时探测用的临时知识库：`052-probe-22c/22d/22e/22f`，每次都在 `finally` 里 `delete_kb`。
+
+### 1.1 版本差异（重要）：线上 v0.8.0 没有 `knowledge-search` 的逐请求覆盖
+
+| 能力 | v0.8.0（线上实测） | v0.9.0（本文 §2 的源码） |
+|---|---|---|
+| `knowledge-search` 请求字段 | 只有 `query` / `knowledge_base_id(s)` / `knowledge_ids` / `tag_ids` / `mentioned_items`；**没有任何阈值、match_count、disable、rerank 字段** | 增加 `vector_threshold` / `keyword_threshold` / `match_count` / `disable_*` / `rerank` |
+| 线上传这些字段 | 被静默忽略：`match_count=1` 仍返回 3 条；`disable_vector_match` / `disable_keywords_match` 结果与默认完全相同；`rerank.enabled=false` / `top_k=1` / `threshold=0.99` 也不改变结果 | 应当生效 |
+| `hybrid-search`（KB 级） | `SearchParams` 有 `vector_threshold` / `keyword_threshold` / `match_count` / `disable_*`；**没有 `rerank` 字段** | 增加 `rerank` 对象 |
+| 线上 `hybrid-search` | 这些参数**确实生效**：`match_count` 1/2/10 → 1/2/3 条；`disable_vector_match`（只关键词）对「电脑」返回 0 条；`disable_keywords_match`（只向量）返回 3 条；`vector_threshold=0.99` / `keyword_threshold=0.99` 都返回 0 条 | — |
+
+源码依据：
+
+- v0.8.0 `SearchKnowledgeRequest` 只有 5 个范围字段：[`internal/handler/session/types.go#L73-L80`](https://github.com/Tencent/WeKnora/blob/1edcd54b43606d9079bb36650efe3f68707a79ea/internal/handler/session/types.go#L73-L80)。
+- v0.8.2 仍然没有；**v0.8.3 才加上**阈值/match_count/disable/rerank 覆盖：[`v0.8.3 types.go#L101-L116`](https://github.com/Tencent/WeKnora/blob/3e22822c1d2397be730c458c7539d0eb8c113a24/internal/handler/session/types.go#L101-L116)。
+- v0.8.0 `SearchParams`（`hybrid-search`）有阈值/开关/match_count、没有 rerank：[`internal/types/search.go#L230-L252`](https://github.com/Tencent/WeKnora/blob/1edcd54b43606d9079bb36650efe3f68707a79ea/internal/types/search.go#L230-L252)。
+
+**对 #22 的直接影响**：
+
+1. 按现状用 `knowledge-search`，CLI **无法**做到票面 AC 的「能调权重/阈值，并能看出结果差异」；连现有的 `--limit`（`match_count`）在线上也是空操作。
+2. 想满足 AC，只有两条路：
+   - **升级 WeKnora 到 v0.8.3+（建议至少 v0.9.0）**，`knowledge-search` 的覆盖才生效；
+   - **改用 `hybrid-search`**（线上 v0.8.0 已支持阈值/开关/match_count），代价是该接口在 v0.8.0 没有 rerank、返回的是召回分。
+3. 无论走哪条，`match_count` 都建议在客户端再截一次（`--limit` 的语义不能依赖服务端版本）。
 - 「已验证（源码）」= 直接读到实现；「已验证（真机）」= 对线上只读接口的实测；「推断」= 由代码行为推出但未跑运行时实验。
 
 ---
@@ -35,6 +60,8 @@ WeKnora 到底把哪些旋钮暴露给逐请求调用、RRF 权重能不能按�
 ## 2. 逐请求检索参数
 
 ### 2.1 `POST /api/v1/knowledge-search`
+
+> 这一节描述的是 **v0.9.0** 契约。线上 v0.8.0 不认这些覆盖字段，差异见 §1.1。
 
 路由：[`routes_chat.go#L155-L158`](https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/router/routes_chat.go#L155-L158)（Viewer + `retrieve` API key）。
 
@@ -151,7 +178,7 @@ score    = rrfScore / maxRRF        # 归一化到 [0,1]
 }
 ```
 
-`0` 表示未显式配置；由于 `GetEffective*` 把 `<=0` 当默认，实际生效值就是 §3.2 的默认表。`rrf_*` 字段因 `omitempty` 未出现，同样走默认 0.7/0.3、k=60。
+`0` 表示未显式配置；由于 `GetEffective*` 把 `<=0` 当默认，实际生效值就是 §3.2 的默认表。`rrf_*` 字段因 `omitempty` 未出现，同样走默认 0.7/0.3、k=60。线上版本为 **v0.8.0**；v0.8.0 的 `RetrievalConfig` 字段与默认值同 v0.9.0（`internal/types/retrieval_config.go` 的 v0.8.0 版本一致），所以默认值结论不变。
 
 > 风险提示：这次只读探测只能证明「当前没有显式覆盖」，不能证明我们的账号有 PUT 权限（PUT 要 Admin）。**不要**在 #22 里让 CLI 随手 PUT 空间配置：它会改掉所有入口的检索行为。
 
@@ -188,7 +215,7 @@ score    = rrfScore / maxRRF        # 归一化到 [0,1]
 
 | 方案 | 做法 | 优点 | 代价/风险 |
 |---|---|---|---|
-| A. 单查询拼词 | 把同义词并入一个 query，例如 `连杆 连接杆 间隙`，一次 `knowledge-search` | 改动最小；BM25 是 OR，能扩大关键词召回；只花一次 rerank | 向量侧是对整串做 embedding，语义可能被稀释；排序解释变难 |
+| A. 单查询拼词 | 把同义词并入一个 query，例如 `连杆 连接杆 间隙`，一次 `knowledge-search` | 改动最小；BM25 是 OR，能扩大关键词召回（真机：`电脑` 关键词路 0 命中，`电脑 计算机` 命中「计算机采购」）；只花一次 rerank | 向量侧是对整串做 embedding，语义可能被稀释；关键词路会带进弱相关噪声（真机里还有 1.1–1.5 分的杂项），要靠 rerank/阈值压 |
 | B. 多查询合并 | 每个变体各跑一次 `knowledge-search`，客户端按 `knowledge_id + chunk` 去重合并 | 每个变体独立 rerank，效果可控 | N 次 rerank 成本；跨查询分数不可直接比较，需要定义合并规则（取 max？RRF？） |
 | C. 关键词补召回 | 原查询正常跑；变体用 `disable_vector_match: true` + 降低 `keyword_threshold` 再跑，合并到结果 | 模仿 WeKnora 自己的扩展思路，避免向量稀释 | 只补关键词；合并后的分数与 rerank 结果不同源；可能引入低分噪声 |
 | D. 别名→项目标签兜底 | 查询命中项目别名时，映射到规范项目名，用 `tag_ids` 过滤重试 | 与现有 `项目/<名>` 标签天然契合；适合「项目简称↔全称」 | `tag_ids` 是收窄不是扩展；只覆盖项目名，不覆盖通用术语；可能把结果限死在错误项目 |
@@ -228,7 +255,7 @@ score    = rrfScore / maxRRF        # 归一化到 [0,1]
 
 基于 §2：
 
-- 可以加：`--vector-threshold`、`--keyword-threshold`（0–1，缺省不传=用空间配置；显式 0=不设阈值）、`--match-count`（0–200，替代/补充现有 `--limit`）、`--no-rerank`、`--rerank-threshold`、`--rerank-top-k`、`--vector-only`、`--keyword-only`。
+- 可以加：`--vector-threshold`、`--keyword-threshold`（0–1，缺省不传=用空间配置；显式 0=不设阈值）、`--match-count`（0–200，替代/补充现有 `--limit`）、`--no-rerank`、`--rerank-threshold`、`--rerank-top-k`、`--vector-only`、`--keyword-only`。**但这些只有在 v0.8.3+ 的 `knowledge-search` 上才真正生效**；线上 v0.8.0 需要先升级，或走 §8.4 的 `hybrid-search` 兼容模式。
 - 不能逐请求透传：`rrf_k`、`rrf_vector_weight`、`rrf_keyword_weight`、`embedding_top_k`。这些只能改空间配置（PUT，Admin，整体替换，影响所有入口）。
 - 如果确实要让用户「调权重」，可选做法是加一个**独立的、显式的**管理命令（先 GET、再合并、再 PUT），并明确提示「改的是整个空间」；不建议把它做成 `search` 的隐式副作用。是否要做，交给 `/grill-with-docs` 拍板。
 
@@ -247,16 +274,36 @@ score    = rrfScore / maxRRF        # 归一化到 [0,1]
   3. 别名是否只服务项目名（`project_aliases`），还是同时支持通用术语（全局 `synonyms`）？
 - 还要定维护入口：手工 SQL？CLI 子命令？YAML + 导入？以及「同义词表为空/命中环」的降级（退回原查询）。
 
-### 8.4 建议先做的一次实测（进 #22 实现前）
+### 8.4 线上 v0.8.0 下的两条落地路线
 
-在临时 KB 上用同一份文档跑三组 `knowledge-search`，确认：
+| 路线 | 做法 | 优点 | 代价 |
+|---|---|---|---|
+| 升级 WeKnora | 升到 v0.8.3+（建议 v0.9.x） | 参数覆盖真正生效；保留 `knowledge-search` 的 rerank；代码按本文 v0.9.0 契约写 | 需要运维操作（Lighthouse 镜像/Compose 升级 + 迁移），可能停机；不在 #22 代码范围内 |
+| 兼容模式 | 默认仍用 `knowledge-search`（现状）；新增 `search --raw` / `--rank-by-recall` 走 `hybrid-search`，在那里透传阈值/开关/match_count | 现在就能满足 AC；`hybrid-search` 的召回分对调阈值更直观 | v0.8.0 的 `hybrid-search` 没有 rerank，结果排序与默认搜索不同；多一条路径要维护/解释 |
 
-1. 只改 `vector_threshold` / `keyword_threshold` 是否真能看出结果差异；
-2. 单查询拼同义词（A）是否比原查询多召回、有没有明显掉精度；
-3. `disable_vector_match: true` + 低关键词阈值（C）是否能把「换个说法」的文档捞回来。
+两者不互斥：可以先做兼容模式落地 #22，同时把「升级 WeKnora」记成独立运维票；升级后 `--raw` 仍然是有用的调参/排障入口。
 
-这三组实验不需要改 WeKnora 配置，只用逐请求参数，风险低。
+### 8.5 实现前还应补做的一次实测
 
+本次已经跑过临时知识库探测（`052-probe-22c/22d/22e/22f`，用完即删），结论：
+
+- 线上 v0.8.0 的 `knowledge-search` 忽略逐请求参数（§1.1）；`hybrid-search` 的参数生效。
+- 单查询拼同义词（A）在关键词侧可行：`电脑 计算机` 能命中「计算机采购」；但本次用例里 `电脑` 单独也能命中（向量语义已经覆盖），所以**没有证明「原始查询会漏、扩展后才命中」**。
+- 两份近义文档会被 WeKnora 的跨文档近似去重合并成一条，实验设计必须让文档内容真正不同。
+
+补做的一组干净实验（`052-probe-22g`，临时 KB，用完即删）已经给出关键信号：
+
+- 关键词路（`hybrid-search` + `disable_vector_match=true`）：`电脑` → **0 命中**；`电脑 计算机` → 命中「计算机采购」（BM25 10.715），另带两条 1.1–1.5 分的弱相关噪声。`航标` → 0；`航标 浮标` → 命中「浮标海试」（12.96）。
+- 向量路（`disable_keywords_match=true`）：`电脑` 已经能命中「计算机采购」（0.488），拼词后分数略降（0.476）。
+- 结论：**单查询拼词确实能补关键词召回**；对语义相近的词，向量路本来就能覆盖；拼词的主要代价是关键词噪声，需要 rerank（默认开）或阈值压掉。
+
+因此实现前还应补的只剩：
+
+1. 用**真正不同**的文档确认「原查询 0 命中 → 扩展后命中」的端到端用例（不要用近似重复文档，会被跨文档去重合并）；
+2. 在同一组文档上比较「原查询」「单查询拼词」「多查询合并」的 top-k 质量；
+3. 确认扩展不会把不相关文档带进最终 top-k（尤其是 rerank 关闭时）。
+
+实验仍然只用临时 KB + 逐请求参数，不改空间配置。
 ---
 
 ## 9. 未核实 / 风险清单
@@ -264,12 +311,13 @@ score    = rrfScore / maxRRF        # 归一化到 [0,1]
 | 项 | 状态 | 说明 |
 |---|---|---|
 | 线上实际检索驱动的关键词算子 | 推断 | 本文按 spec 的 ParadeDB/Postgres 路径解释 `|||`；未从线上实例确认 `RETRIEVE_DRIVER`。若换 Qdrant，关键词也是 token OR（文档表），结论方向一致，但分词/打分不同。 |
+| 线上版本 | 已验证 | `GET /api/v1/system/info` 返回 `version=0.8.0`、`commit_id=1edcd54`；与本文引用的 v0.9.0 契约有 §1.1 的差异。 |
 | `knowledge-search` 不做查询扩展 | 已验证（源码），未做运行时反证 | 依据是 `ChatManage` 未设 `EnableQueryExpansion` + 事件列表；没有构造低召回场景做对照实验。 |
 | 同义词拼进单查询的向量稀释 | 未实测 | 需要 §8.4 的实验。 |
 | PUT retrieval-config 的权限 | 未实测 | 只读 GET 可用；PUT 要 Admin，本文没有写。 |
 | `rrf_*` 的 PUT 行为 | 已验证（源码），未实测 | 无范围校验；`<=0` 回退默认；PUT 整体替换。 |
 | 多查询合并的成本/排序 | 未实测 | rerank 调用次数与分数可比性需要实测。 |
-| 版本漂移 | 低风险 | 线上 v0.9.x 与 v0.9.0 的检索代码结构一致；升级后重核本文链接。 |
+| 版本漂移 | **中风险** | 线上是 v0.8.0，不是 v0.9.x；`knowledge-search` 的逐请求覆盖不存在（§1.1）。升级到 v0.8.3+ 后需重核本文链接与 AC。 |
 
 ---
 
