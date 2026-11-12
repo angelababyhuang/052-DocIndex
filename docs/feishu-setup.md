@@ -97,7 +97,7 @@ python -m docarchive feishu status
 
 预期能看到 `platform=feishu`、`enabled=是`、`credentials=已配置`、`kb=<052 文档库 id>`。
 
-> 一个飞书 bot（同一 `app_id`）只能挂一个 WeKnora 渠道。若返回「已绑定另一个渠道」，
+> 一个飞书应用（同一 `app_id`，bot identity 为 `feishu:<app_id>`）只能挂一个 WeKnora 渠道。若返回「已绑定另一个渠道」，
 > 先在 WeKnora 的「设置 → IM 集成」里删掉/改绑旧渠道，或直接复用它。
 
 ## 7. 验收

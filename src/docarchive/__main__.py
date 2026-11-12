@@ -367,8 +367,7 @@ def cmd_feishu_setup(args):
 def cmd_feishu_status(args):
     client = _weknora_client()
     try:
-        channels = [c for c in client.list_im_channels()
-                    if c.get("platform") == feishu.FEISHU_PLATFORM]
+        channels = feishu.feishu_channels(client.list_im_channels())
     except weknora.WeKnoraError as e:
         raise SystemExit(str(e))
     if not channels:
@@ -376,23 +375,18 @@ def cmd_feishu_status(args):
         return
     try:
         agents = {a.get("id"): a for a in client.list_agents()}
-    except weknora.WeKnoraError:
+    except weknora.WeKnoraError as e:
         agents = {}
+        print(f"  ⚠ 查 Agent 失败，KB 可能显示不全：{e}")
     print(f"飞书渠道 {len(channels)} 个：")
     for c in channels:
-        agent = agents.get(c.get("agent_id")) or {}
-        kb_id = c.get("knowledge_base_id") or next(
-            iter((agent.get("config") or {}).get("knowledge_bases") or []), "")
-        # v0.8.0 的渠道摘要不回 knowledge_base_id / credentials_configured；
-        # 前者从绑定 Agent 的 KB 补，后者用 bot_identity 是否存在判断。
-        configured = c.get("credentials_configured")
-        if configured is None:
-            configured = bool(c.get("bot_identity"))
-        print(f"  {c.get('id')}  {c.get('name') or '-'}"
-              f"  agent={c.get('agent_id') or '-'}"
-              f"  kb={kb_id or '-'}"
-              f"  enabled={'是' if c.get('enabled') else '否'}"
-              f"  credentials={'已配置' if configured else '未配置'}")
+        v = feishu.channel_view(c, agents)
+        print(f"  {v['id']}  {v['name']}"
+              f"  platform={v['platform']}"
+              f"  agent={v['agent_id']}"
+              f"  kb={v['kb_id']}"
+              f"  enabled={'是' if v['enabled'] else '否'}"
+              f"  credentials={'已配置' if v['configured'] else '未配置'}")
 
 
 # ---------------- 参数 ----------------

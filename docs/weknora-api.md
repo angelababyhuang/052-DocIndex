@@ -73,6 +73,30 @@ manual 推的 markdown 里写 `{{IMG-0001}}`，分块正文和 `knowledge-search
 （按分块 id 则用 `GET /api/v1/chunks/by-id/:id`）的 `start_at`/`end_at` 做偏移映射；
 本仓库目前没有走这条路（ADR-0005）。
 
+## Agent 与 IM 渠道（#16 实测）
+
+飞书入口不写机器人代码，靠 WeKnora 原生渠道。052 只调这几个接口：
+
+| 用途 | 方法与路径 | 关键字段 |
+|---|---|---|
+| 列 Agent | `GET /api/v1/agents?page=1&page_size=100` | `data` 是数组；`config.kb_selection_mode` / `knowledge_bases` |
+| Agent 详情 | `GET /api/v1/agents/:id` | 改配置前用它拿完整 `config`（列表可能截断） |
+| 建 Agent | `POST /api/v1/agents` | body `{name, config: {agent_mode: "quick-answer", kb_selection_mode: "selected", knowledge_bases: [kb]}}` |
+| 改 Agent | `PUT /api/v1/agents/:id` | **即使只改 `config` 也必须带 `name`**；v0.8.0 缺 name 返回 400 `agent name is required` |
+| 列 IM 渠道 | `GET /api/v1/im-channels` | `data` 数组；摘要含 `platform`、`agent_id`、`bot_identity`、`enabled` |
+| 建飞书渠道 | `POST /api/v1/agents/:id/im-channels` | body `{platform: "feishu", name, mode: "websocket", credentials: {app_id, app_secret}, knowledge_base_id, enabled: true}` |
+| 更新渠道 | `PUT /api/v1/im-channels/:id` | 局部更新 `name/credentials/knowledge_base_id/enabled` |
+
+约定与坑：
+
+- 飞书 bot 身份是 `feishu:<app_id>`，数据库唯一：**同一个 app_id 只能挂一个渠道**；
+  不同 app_id 可以各自建渠道。
+- v0.8.0 的渠道**摘要**可能不回 `knowledge_base_id` / `credentials_configured`；
+  前者从绑定 Agent 的 `config.knowledge_bases` 补，后者用 `bot_identity` 是否存在判断。
+- websocket 模式凭据只要 `app_id` / `app_secret`；`verification_token` / `encrypt_key`
+  只在 webhook 模式做签名校验。事件订阅要选长连接并订阅 `im.message.receive_v1`。
+- 建应用/开权限/发布的完整清单见 `docs/feishu-setup.md`。
+
 ## 需要知道的限制
 
 - **手动 markdown 是异步解析的**：实测 2–3 秒从 `pending` 到 `completed`。`index --wait` 就是轮询这个状态；不要假装同步成功。

@@ -1,4 +1,4 @@
-"""WeKnora HTTP 客户端（只包 #15 用得到的几个动作）。
+"""WeKnora HTTP 客户端（052 用到的索引 / 检索 / Agent / IM 渠道动作）。
 
 认证用账号密码换 JWT（`.env` 里的 WEKNORA_EMAIL / WEKNORA_PASSWORD），
 不引第三方 HTTP 库，和 caption.py 一样走 stdlib。
@@ -115,6 +115,14 @@ class WeKnoraClient:
             if agent.get("name") == name:
                 return agent
         return None
+
+    def get_agent(self, agent_id: str) -> dict:
+        """取 Agent 详情（列表可能截断 config；改配置前用详情更安全）。"""
+        data = self._request("GET", f"/api/v1/agents/{agent_id}")
+        agent = _dig(data, "data") or {}
+        if not agent.get("id"):
+            raise WeKnoraError(f"没拿到 Agent 详情: {str(data)[:200]}")
+        return agent
 
     def create_agent(self, name: str, knowledge_base_ids: Iterable[str]) -> str:
         """建一个只绑定指定知识库的快速问答 Agent，给飞书渠道用。"""

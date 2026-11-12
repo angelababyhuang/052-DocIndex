@@ -224,6 +224,13 @@ def test_find_agent_matches_by_name(monkeypatch, client):
     assert client.find_agent("不存在") is None
 
 
+def test_get_agent_payload(monkeypatch, client):
+    stub(monkeypatch, client, {"data": {"id": "a-1", "name": "052 文档助手", "config": {}}})
+    agent = client.get_agent("a-1")
+    assert agent["id"] == "a-1"
+    assert agent["config"] == {}
+
+
 def test_create_agent_payload(monkeypatch, client):
     calls = stub(monkeypatch, client, {"success": True, "data": {"id": "a-1"}})
     assert client.create_agent("052 文档助手", ["kb-1"]) == "a-1"

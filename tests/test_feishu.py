@@ -17,6 +17,10 @@ class FakeClient:
     def find_agent(self, name):
         return self.agent
 
+    def get_agent(self, agent_id):
+        self.calls.append(("get_agent", agent_id))
+        return self.agent or {"id": agent_id}
+
     def create_agent(self, name, knowledge_base_ids):
         self.calls.append(("create_agent", name, tuple(knowledge_base_ids)))
         return "a-1"
@@ -77,6 +81,7 @@ def test_setup_updates_existing_channel_idempotently():
     assert report.created_agent is False
     assert report.created_channel is False
     assert client.calls == [
+        ("get_agent", "a-1"),
         ("update_agent_config", "a-1", {
             "kb_selection_mode": "selected", "knowledge_bases": ["kb-1"],
         }, "052 文档助手"),
@@ -112,13 +117,25 @@ def test_setup_requires_existing_knowledge_base():
 def test_setup_refuses_bot_already_bound_to_another_agent():
     client = FakeClient(
         channels=[{"id": "ch-old", "platform": "feishu",
-                   "agent_id": "a-other", "name": "旧渠道"}],
+                   "agent_id": "a-other", "name": "旧渠道",
+                   "bot_identity": "feishu:cli_x"}],
     )
     with pytest.raises(feishu.FeishuSetupError) as ei:
         feishu.setup(client, kb_name="052 文档库",
                      credentials={"app_id": "cli_x", "app_secret": "s"})
-    assert "一个 bot" in str(ei.value)
-    assert not [c for c in client.calls if c[0] == "create_im_channel"]
+    assert "同一个 app" in str(ei.value)
+    assert not [c for c in client.calls if c[0] in ("create_agent", "create_im_channel")]
+
+
+def test_setup_allows_a_different_feishu_app():
+    client = FakeClient(
+        channels=[{"id": "ch-old", "platform": "feishu",
+                   "agent_id": "a-other", "name": "旧渠道",
+                   "bot_identity": "feishu:cli_other"}],
+    )
+    report = feishu.setup(client, kb_name="052 文档库",
+                          credentials={"app_id": "cli_x", "app_secret": "s"})
+    assert report.created_agent and report.created_channel
 
 
 def test_setup_refuses_builtin_agent_name():
@@ -127,3 +144,31 @@ def test_setup_refuses_builtin_agent_name():
         feishu.setup(client, kb_name="052 文档库",
                      credentials={"app_id": "cli_x", "app_secret": "s"})
     assert "内置 Agent" in str(ei.value)
+
+
+def test_channel_view_falls_back_to_agent_kb_and_bot_identity():
+    view = feishu.channel_view(
+        {"id": "ch-1", "platform": "feishu", "agent_id": "a-1",
+         "bot_identity": "feishu:cli_x", "enabled": True},
+        {"a-1": {"config": {"knowledge_bases": ["kb-1"]}}},
+    )
+    assert view == {
+        "id": "ch-1", "name": "-", "platform": "feishu",
+        "agent_id": "a-1", "kb_id": "kb-1", "enabled": True, "configured": True,
+    }
+
+
+def test_setup_raises_when_channel_update_returns_empty():
+    class EmptyUpdate(FakeClient):
+        def update_im_channel(self, channel_id, **fields):
+            return {}
+
+    client = EmptyUpdate(
+        agent={"id": "a-1", "name": "052 文档助手"},
+        channels=[{"id": "ch-1", "platform": "feishu", "agent_id": "a-1",
+                   "bot_identity": "feishu:cli_x"}],
+    )
+    with pytest.raises(feishu.FeishuSetupError) as ei:
+        feishu.setup(client, kb_name="052 文档库",
+                     credentials={"app_id": "cli_x", "app_secret": "s"})
+    assert "更新飞书渠道" in str(ei.value)
