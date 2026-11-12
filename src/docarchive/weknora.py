@@ -124,16 +124,38 @@ class WeKnoraClient:
             raise WeKnoraError(f"没拿到 Agent 详情: {str(data)[:200]}")
         return agent
 
+    def knowledge_qa_model_id(self, preferred: str | None = None) -> str | None:
+        """挑一个知识问答模型（KnowledgeQA）；preferred 按名字匹配。"""
+        models = _items(self._request("GET", "/api/v1/models?page=1&page_size=100"))
+        chat = [m for m in models if _is_knowledge_qa(m)]
+        if preferred:
+            for m in chat:
+                if preferred in (m.get("name") or ""):
+                    return m.get("id")
+        return chat[0].get("id") if chat else None
+
     def create_agent(self, name: str, knowledge_base_ids: Iterable[str]) -> str:
-        """建一个只绑定指定知识库的快速问答 Agent，给飞书渠道用。"""
-        payload = {
-            "name": name,
-            "config": {
-                "agent_mode": "quick-answer",
-                "kb_selection_mode": "selected",
-                "knowledge_bases": list(knowledge_base_ids),
-            },
-        }
+        """建一个只绑定指定知识库的快速问答 Agent，给飞书渠道用。
+
+        自建 Agent 不会像内置 Agent 那样回退默认对话模型，必须显式写 model_id；
+        提示词/上下文模板也从内置「快速问答」复制，否则问答会报 chat model 未配置。
+        """
+        config: dict = {}
+        try:
+            template = self.get_agent("builtin-quick-answer")
+            config = dict(template.get("config") or {})
+        except WeKnoraError:
+            config = {}
+        config.update({
+            "agent_mode": "quick-answer",
+            "kb_selection_mode": "selected",
+            "knowledge_bases": list(knowledge_base_ids),
+        })
+        config.setdefault("system_prompt_id", "default_kb")
+        config.setdefault("context_template_id", "default_context")
+        if not config.get("model_id"):
+            config["model_id"] = self.knowledge_qa_model_id() or ""
+        payload = {"name": name, "config": config}
         data = self._request("POST", "/api/v1/agents", payload)
         agent_id = _dig(data, "data", "id")
         if not agent_id:
@@ -294,3 +316,8 @@ def _dig(obj: Mapping, *path: str):
 def _is_embedding(model: Mapping) -> bool:
     kind = (model.get("type") or model.get("model_type") or "").lower()
     return "embed" in kind
+
+
+def _is_knowledge_qa(model: Mapping) -> bool:
+    kind = (model.get("type") or model.get("model_type") or "").lower()
+    return "knowledgeqa" in kind or "knowledge_qa" in kind or kind == "chat"

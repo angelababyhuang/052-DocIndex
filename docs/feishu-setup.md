@@ -177,6 +177,7 @@ python -m docarchive feishu status
 | 收不到群消息 | 群聊权限 `im:message.group_at_msg:readonly`；是否 @ 了机器人 |
 | 流式卡片不更新/报 `cardkit` 错误 | `cardkit:card:write` 没开；WeKnora 会退回普通消息 |
 | `/search` 永远 0 条 | `052 文档库` 是否已 `index --wait`；Agent 是否绑错 KB；知识是否 `completed` |
+| 自然语言问答报「chat model is not configured」 | 自建 Agent 没设 `model_id`；重跑 `feishu setup`（现在会复制内置快速问答配置并钉 KnowledgeQA 模型），或手工给 Agent 设 `model_id` |
 | `feishu setup` 报「知识库不存在」 | 先跑 `python -m docarchive index --kb-name "052 文档库"` |
 | `feishu setup` 报「已绑定另一个渠道」 | 一个 bot 只能一个渠道；去 WeKnora「设置 → IM 集成」删旧渠道 |
 | WeKnora 连不上飞书 | 服务器能否访问 `open.feishu.cn`；如走反代，给渠道凭据加 `api_base_url` |

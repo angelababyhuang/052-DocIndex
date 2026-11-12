@@ -232,15 +232,28 @@ def test_get_agent_payload(monkeypatch, client):
 
 
 def test_create_agent_payload(monkeypatch, client):
-    calls = stub(monkeypatch, client, {"success": True, "data": {"id": "a-1"}})
+    calls = stub(
+        monkeypatch, client,
+        {"data": {"id": "builtin-quick-answer", "config": {
+            "system_prompt": "p", "system_prompt_id": "default_kb",
+            "context_template_id": "default_context", "temperature": 0.7,
+        }}},
+        {"data": [{"id": "m-1", "name": "deepseek-flash", "type": "KnowledgeQA"}]},
+        {"success": True, "data": {"id": "a-1"}},
+    )
     assert client.create_agent("052 文档助手", ["kb-1"]) == "a-1"
-    method, path, payload = calls[0]
+    method, path, payload = calls[2]
     assert (method, path) == ("POST", "/api/v1/agents")
     assert payload["name"] == "052 文档助手"
     assert payload["config"] == {
+        "system_prompt": "p",
+        "system_prompt_id": "default_kb",
+        "context_template_id": "default_context",
+        "temperature": 0.7,
         "agent_mode": "quick-answer",
         "kb_selection_mode": "selected",
         "knowledge_bases": ["kb-1"],
+        "model_id": "m-1",
     }
 
 
