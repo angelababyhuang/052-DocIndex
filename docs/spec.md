@@ -230,7 +230,7 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 
 ### 8.1 飞书机器人（主入口）
 
-- **WeKnora 原生飞书渠道**（`platform: feishu`，websocket 长连接），零自建代码。
+- **WeKnora 原生飞书渠道**（`platform: feishu`，websocket 长连接），零自建代码。建应用/开权限/发布步骤见 `docs/feishu-setup.md`；052 侧用 `python -m docarchive feishu setup` 建 Agent 与渠道，`feishu status` 查状态。
 - 所需凭证（飞书开放平台自建应用）：`app_id`、`app_secret`、`verification_token`、`encrypt_key`。
 - 交互命令：
   - `/search`（内容检索，混合检索返回原文片段，**不经 AI 总结**，最多 5 条、每条 200 rune + 匹配度）

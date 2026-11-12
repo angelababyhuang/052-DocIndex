@@ -104,6 +104,76 @@ class WeKnoraClient:
             return None
         return embedding[0].get("id") if embedding else None
 
+    # ---------------- Agent 与 IM 渠道（#16） ----------------
+
+    def list_agents(self) -> list[dict]:
+        data = self._request("GET", "/api/v1/agents?page=1&page_size=100")
+        return _items(data)
+
+    def find_agent(self, name: str) -> dict | None:
+        for agent in self.list_agents():
+            if agent.get("name") == name:
+                return agent
+        return None
+
+    def create_agent(self, name: str, knowledge_base_ids: Iterable[str]) -> str:
+        """建一个只绑定指定知识库的快速问答 Agent，给飞书渠道用。"""
+        payload = {
+            "name": name,
+            "config": {
+                "agent_mode": "quick-answer",
+                "kb_selection_mode": "selected",
+                "knowledge_bases": list(knowledge_base_ids),
+            },
+        }
+        data = self._request("POST", "/api/v1/agents", payload)
+        agent_id = _dig(data, "data", "id")
+        if not agent_id:
+            raise WeKnoraError(f"建 Agent 没拿到 id: {str(data)[:200]}")
+        return agent_id
+
+    def update_agent_config(self, agent_id: str, config: Mapping,
+                            name: str | None = None) -> dict:
+        """更新 Agent 配置（渠道绑定的知识库变了时用；config 整体替换）。
+
+        v0.8.0 的 PUT 即使只改 config 也要求带 name（否则 400 `agent name is required`）。
+        """
+        payload: dict = {"config": dict(config)}
+        if name:
+            payload["name"] = name
+        data = self._request("PUT", f"/api/v1/agents/{agent_id}", payload)
+        return _dig(data, "data") or {}
+
+    def list_im_channels(self) -> list[dict]:
+        return _items(self._request("GET", "/api/v1/im-channels"))
+
+    def create_im_channel(self, agent_id: str, platform: str, name: str,
+                          credentials: Mapping[str, str], *,
+                          knowledge_base_id: str = "",
+                          mode: str = "websocket") -> dict:
+        payload: dict = {
+            "platform": platform,
+            "name": name,
+            "mode": mode,
+            "credentials": dict(credentials),
+            "enabled": True,
+        }
+        if knowledge_base_id:
+            payload["knowledge_base_id"] = knowledge_base_id
+        data = self._request(
+            "POST", f"/api/v1/agents/{agent_id}/im-channels", payload
+        )
+        channel = _dig(data, "data") or {}
+        if not channel.get("id"):
+            raise WeKnoraError(f"建 IM 渠道没拿到 id: {str(data)[:200]}")
+        return channel
+
+    def update_im_channel(self, channel_id: str, **fields) -> dict:
+        """局部更新 IM 渠道（name / credentials / knowledge_base_id / enabled…）。"""
+        data = self._request("PUT", f"/api/v1/im-channels/{channel_id}",
+                             {k: v for k, v in fields.items() if v is not None})
+        return _dig(data, "data") or {}
+
     # ---------------- 标签 ----------------
 
     def ensure_tag(self, kb_id: str, name: str) -> str:

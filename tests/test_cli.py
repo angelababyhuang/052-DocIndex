@@ -520,3 +520,68 @@ def test_cli_search_reports_missing_document_file(tmp_path, monkeypatch, capsys,
     out = capsys.readouterr().out
     assert "文件缺失" in out
     assert "连杆方案" in out  # 文本命中照常
+
+
+# ---------- #16：飞书查询入口 ----------
+
+class _FeishuFake:
+    def __init__(self):
+        self.created = None
+
+    def find_kb(self, name):
+        return "kb-1"
+
+    def find_agent(self, name):
+        return None
+
+    def create_agent(self, name, knowledge_base_ids):
+        return "a-1"
+
+    def list_im_channels(self):
+        return []
+
+    def create_im_channel(self, agent_id, platform, name, credentials, *,
+                          knowledge_base_id="", mode="websocket"):
+        self.created = (agent_id, platform, name, dict(credentials), knowledge_base_id, mode)
+        return {"id": "ch-1", "enabled": True, "credentials_configured": True}
+
+
+def test_cli_feishu_setup_creates_channel(tmp_path, monkeypatch, capsys):
+    fake = _FeishuFake()
+    monkeypatch.setattr(cli, "_weknora_client", lambda: fake)
+    monkeypatch.setattr(cli, "merged",
+                        lambda: {"FEISHU_APP_ID": "cli_x", "FEISHU_APP_SECRET": "s"})
+
+    run_cli(monkeypatch, "feishu", "setup", "--kb-name", "052 文档库")
+
+    out = capsys.readouterr().out
+    assert "ch-1" in out and "a-1" in out and "kb-1" in out
+    assert fake.created == ("a-1", "feishu", "052 飞书入口",
+                            {"app_id": "cli_x", "app_secret": "s"}, "kb-1", "websocket")
+    assert "feishu-setup" in out
+
+
+def test_cli_feishu_setup_without_credentials_exits(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "merged", lambda: {})
+    with pytest.raises(SystemExit) as ei:
+        run_cli(monkeypatch, "feishu", "setup")
+    assert "FEISHU_APP_ID" in str(ei.value)
+
+
+def test_cli_feishu_status_lists_channels(monkeypatch, capsys):
+    class _StatusFake:
+        def list_im_channels(self):
+            return [{"id": "ch-1", "platform": "feishu", "name": "052 飞书入口",
+                     "agent_id": "a-1", "bot_identity": "feishu:cli_x",
+                     "enabled": True}]
+
+        def list_agents(self):
+            return [{"id": "a-1", "name": "052 文档助手",
+                     "config": {"kb_selection_mode": "selected",
+                                "knowledge_bases": ["kb-1"]}}]
+
+    monkeypatch.setattr(cli, "_weknora_client", lambda: _StatusFake())
+    run_cli(monkeypatch, "feishu", "status")
+    out = capsys.readouterr().out
+    assert "ch-1" in out and "052 飞书入口" in out and "kb=kb-1" in out
+    assert "已配置" in out
