@@ -12,6 +12,7 @@ from docarchive import (
     caption,
     convert,
     db,
+    feishu,
     index,
     ingest,
     media,
@@ -336,6 +337,58 @@ def _format_image(ref: media.ImageLocation, label: str) -> str:
     return f"{label} {ref.code}  {detail}"
 
 
+def cmd_feishu_setup(args):
+    try:
+        creds = feishu.credentials_from_env(merged())
+    except feishu.FeishuSetupError as e:
+        raise SystemExit(str(e))
+    client = _weknora_client()
+    try:
+        report = feishu.setup(
+            client, kb_name=args.kb_name, credentials=creds,
+            agent_name=args.agent_name, channel_name=args.channel_name,
+        )
+    except (feishu.FeishuSetupError, weknora.WeKnoraError) as e:
+        raise SystemExit(str(e))
+    changes = []
+    if report.created_agent:
+        changes.append("新 Agent")
+    if report.created_channel:
+        changes.append("新渠道")
+    state = f"（{'，'.join(changes)}）" if changes else "（已更新）"
+    print(f"飞书渠道 {report.channel_id} → Agent {report.agent_id}"
+          f"，知识库 {report.knowledge_base_id}{state}")
+    print(f"  启用：{'是' if report.enabled else '否'}；"
+          f"凭据：{'已配置' if report.credentials_configured else '未配置'}")
+    print("下一步：确认飞书应用已发布、机器人/事件订阅已开启，"
+          "然后在私聊里发 /search <关键词>（步骤见 docs/feishu-setup.md）。")
+
+
+def cmd_feishu_status(args):
+    client = _weknora_client()
+    try:
+        channels = feishu.feishu_channels(client.list_im_channels())
+    except weknora.WeKnoraError as e:
+        raise SystemExit(str(e))
+    if not channels:
+        print("没有飞书渠道；先跑 feishu setup")
+        return
+    try:
+        agents = {a.get("id"): a for a in client.list_agents()}
+    except weknora.WeKnoraError as e:
+        agents = {}
+        print(f"  ⚠ 查 Agent 失败，KB 可能显示不全：{e}")
+    print(f"飞书渠道 {len(channels)} 个：")
+    for c in channels:
+        v = feishu.channel_view(c, agents)
+        print(f"  {v['id']}  {v['name']}"
+              f"  platform={v['platform']}"
+              f"  agent={v['agent_id']}"
+              f"  kb={v['kb_id']}"
+              f"  enabled={'是' if v['enabled'] else '否'}"
+              f"  credentials={'已配置' if v['configured'] else '未配置'}")
+
+
 # ---------------- 参数 ----------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -435,6 +488,18 @@ def build_parser() -> argparse.ArgumentParser:
                    help="额外打印解析状态（index 本来就会等解析完再写元数据）")
     p.add_argument("--dry-run", action="store_true", help="只统计，不连 WeKnora")
     p.set_defaults(func=cmd_index)
+
+    p = sub.add_parser("feishu", help="飞书查询入口（WeKnora 原生渠道）")
+    fs = p.add_subparsers(dest="feishu_cmd", required=True)
+    s = fs.add_parser("setup", help="建/更新飞书渠道（凭据读 .env）")
+    s.add_argument("--kb-name", default=DEFAULT_KB_NAME, help="要绑定的知识库名")
+    s.add_argument("--agent-name", default=feishu.DEFAULT_AGENT_NAME,
+                   help="绑定的 Agent 名（不存在则新建）")
+    s.add_argument("--channel-name", default=feishu.DEFAULT_CHANNEL_NAME,
+                   help="渠道显示名")
+    s.set_defaults(func=cmd_feishu_setup)
+    s = fs.add_parser("status", help="查看飞书渠道状态")
+    s.set_defaults(func=cmd_feishu_status)
 
     p = sub.add_parser("search", help="在 WeKnora 里做内容检索")
     p.add_argument("query", help="关键词或自然语言")

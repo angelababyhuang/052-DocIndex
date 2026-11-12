@@ -230,14 +230,14 @@ WeKnora（云端）── 向量库 / BM25 检索 / 飞书渠道 / 问答
 
 ### 8.1 飞书机器人（主入口）
 
-- **WeKnora 原生飞书渠道**（`platform: feishu`，websocket 长连接），零自建代码。
-- 所需凭证（飞书开放平台自建应用）：`app_id`、`app_secret`、`verification_token`、`encrypt_key`。
+- **WeKnora 原生飞书渠道**（`platform: feishu`，websocket 长连接），零自建代码。建应用/开权限/发布步骤见 `docs/feishu-setup.md`；052 侧用 `python -m docarchive feishu setup` 建 Agent 与渠道，`feishu status` 查状态。
+- 所需凭证：websocket 模式只需 `app_id` / `app_secret`；`verification_token` / `encrypt_key` 仅 webhook 模式（本仓库用不到）。
 - 交互命令：
   - `/search`（内容检索，混合检索返回原文片段，**不经 AI 总结**，最多 5 条、每条 200 rune + 匹配度）
   - `/find`（**文件定位，第二阶段开发**：查 SQLite 返回「在不在 + 受管位置 + 出现历史」，见 §7.4 与票 #9；第一阶段用 014 `cmd_find` 命令行兜底）
   - 自然语言问答（附赠）
 - 服务范围：先私聊，跑通后群聊（群聊涉及 @机器人、话题回复）。
-- **执行后置**：建应用的开权限清单写进接入步骤，不阻塞主线。
+- **执行后置**：建应用、开权限、事件订阅、发布步骤见 `docs/feishu-setup.md`；私聊跑通后再开群聊。
 
 ### 8.2 局域网 Web UI（辅入口）
 
@@ -283,6 +283,5 @@ WeKnora 自带前端，绑到内网 IP。
 
 - Image/Video/Document 完整字段契约（继承 031 图片库字段 + caption/尺寸/时长等）
 - 关联项目标签在 SQLite 的存法（JSON 列 vs 独立 tag 表）与 WeKnora 标签映射
-- 飞书建应用的开权限步骤清单
 - 014 指纹复算校验脚本
 - `/find` 文件定位命令（第二阶段，票 #9 已决议：MCP + 直接返回原始结果，开发前先实测验证）

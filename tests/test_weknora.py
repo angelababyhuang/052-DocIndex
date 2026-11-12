@@ -211,3 +211,77 @@ def test_wait_knowledge_polls_until_done(monkeypatch, client):
 def test_wait_knowledge_timeout_reports_current_status(monkeypatch, client):
     monkeypatch.setattr(client, "knowledge_status", lambda kid: "processing")
     assert client.wait_knowledge(["k1"], timeout=0, interval=0) == {"k1": "processing"}
+
+
+# ---------- #16：Agent 与 IM 渠道 ----------
+
+def test_find_agent_matches_by_name(monkeypatch, client):
+    stub(monkeypatch, client, {"data": [
+        {"id": "a-1", "name": "快速问答"},
+        {"id": "a-2", "name": "052 文档助手"},
+    ]})
+    assert client.find_agent("052 文档助手")["id"] == "a-2"
+    assert client.find_agent("不存在") is None
+
+
+def test_get_agent_payload(monkeypatch, client):
+    stub(monkeypatch, client, {"data": {"id": "a-1", "name": "052 文档助手", "config": {}}})
+    agent = client.get_agent("a-1")
+    assert agent["id"] == "a-1"
+    assert agent["config"] == {}
+
+
+def test_create_agent_payload(monkeypatch, client):
+    calls = stub(monkeypatch, client, {"success": True, "data": {"id": "a-1"}})
+    assert client.create_agent("052 文档助手", ["kb-1"]) == "a-1"
+    method, path, payload = calls[0]
+    assert (method, path) == ("POST", "/api/v1/agents")
+    assert payload["name"] == "052 文档助手"
+    assert payload["config"] == {
+        "agent_mode": "quick-answer",
+        "kb_selection_mode": "selected",
+        "knowledge_bases": ["kb-1"],
+    }
+
+
+def test_update_agent_config_payload(monkeypatch, client):
+    calls = stub(monkeypatch, client, {"data": {"id": "a-1"}})
+    client.update_agent_config("a-1", {"kb_selection_mode": "selected", "knowledge_bases": ["kb-1"]},
+                               name="052 文档助手")
+    assert calls[0] == ("PUT", "/api/v1/agents/a-1", {"name": "052 文档助手", "config": {
+        "kb_selection_mode": "selected", "knowledge_bases": ["kb-1"],
+    }})
+
+
+def test_list_im_channels(monkeypatch, client):
+    stub(monkeypatch, client, {"data": [
+        {"id": "ch-1", "platform": "feishu", "enabled": True},
+    ]})
+    assert client.list_im_channels()[0]["id"] == "ch-1"
+
+
+def test_create_im_channel_payload(monkeypatch, client):
+    calls = stub(monkeypatch, client, {"data": {"id": "ch-1", "enabled": True}})
+    channel = client.create_im_channel(
+        "a-1", "feishu", "052 飞书入口",
+        {"app_id": "cli_x", "app_secret": "secret"},
+        knowledge_base_id="kb-1",
+    )
+    assert channel["id"] == "ch-1"
+    method, path, payload = calls[0]
+    assert (method, path) == ("POST", "/api/v1/agents/a-1/im-channels")
+    assert payload == {
+        "platform": "feishu",
+        "name": "052 飞书入口",
+        "mode": "websocket",
+        "credentials": {"app_id": "cli_x", "app_secret": "secret"},
+        "enabled": True,
+        "knowledge_base_id": "kb-1",
+    }
+
+
+def test_update_im_channel_sends_only_given_fields(monkeypatch, client):
+    calls = stub(monkeypatch, client, {"data": {"id": "ch-1", "enabled": True}})
+    client.update_im_channel("ch-1", enabled=True, knowledge_base_id="kb-1")
+    assert calls[0] == ("PUT", "/api/v1/im-channels/ch-1",
+                        {"enabled": True, "knowledge_base_id": "kb-1"})
