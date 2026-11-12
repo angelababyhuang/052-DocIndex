@@ -16,6 +16,18 @@
    ```
 3. 有一个飞书账号，并且能在飞书开放平台创建 **企业自建应用**。
 
+## 0.1 关键：一个应用只能给 WeKnora 用
+
+飞书长连接是**集群推送，不广播**：同一个应用如果同时被 OpenClaw / Hermes / Cola 等网关和
+WeKnora 连接，用户发的消息**只会随机落到其中一个 client**——表现就是「飞书里发了消息，
+WeKnora 这边完全没反应」。
+
+- 给 052 **单独建一个自建应用**，不要复用已经在跑别的机器人的 app。
+- 上线后可以在飞书开放平台用「获取长连接在线数量」接口核对：
+  `GET https://open.feishu.cn/open-apis/event/v1/connection`（tenant_access_token 鉴权），
+  `online_instance_cnt` 应为 **1**；大于 1 说明还有别的 client 在抢事件。
+- WeKnora 侧 `feishu status` 只能看到渠道存在，**看不到飞书连接数**；这个要单独查。
+
 ## 1. 创建飞书自建应用
 
 1. 打开 <https://open.feishu.cn/app>，用飞书账号登录。
@@ -116,7 +128,7 @@ python -m docarchive feishu status
 
 | 现象 | 先查 |
 |---|---|
-| 私聊发消息完全没反应 | 应用是否已发布；机器人能力是否开启；事件订阅是否选长连接并订阅 `im.message.receive_v1`；权限是否已审批；`feishu status` 的 `enabled` |
+| 私聊发消息完全没反应 | 先查这个 app 是否被别的网关共用：`GET /open-apis/event/v1/connection` 的 `online_instance_cnt` 是否 >1（长连接事件随机分发）；再查应用是否已发布、机器人能力、事件订阅 `im.message.receive_v1`、权限审批、`feishu status` 的 `enabled` |
 | 回复「权限不足 / 99991672」 | 权限没开或没发布新版本；对照 §3 重开并重新发布 |
 | 收不到群消息 | 群聊权限 `im:message.group_at_msg:readonly`；是否 @ 了机器人 |
 | 流式卡片不更新/报 `cardkit` 错误 | `cardkit:card:write` 没开；WeKnora 会退回普通消息 |

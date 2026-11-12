@@ -360,6 +360,8 @@ def cmd_feishu_setup(args):
           f"，知识库 {report.knowledge_base_id}{state}")
     print(f"  启用：{'是' if report.enabled else '否'}；"
           f"凭据：{'已配置' if report.credentials_configured else '未配置'}")
+    print("  注意：这个飞书应用必须只给 WeKnora 用；若同时跑 OpenClaw/Hermes 等网关，"
+          "长连接事件会随机分发（见 docs/feishu-setup.md §0.1）。")
     print("下一步：确认飞书应用已发布、机器人/事件订阅已开启，"
           "然后在私聊里发 /search <关键词>（步骤见 docs/feishu-setup.md）。")
 
