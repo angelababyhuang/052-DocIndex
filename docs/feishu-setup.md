@@ -88,6 +88,27 @@ WeKnora 这边完全没反应」。
 | `im:message.group_at_msg:readonly` | 接收群里 @机器人 的消息 | 群聊阶段再开 |
 | `im:chat:readonly` | 读取群信息（群聊回复兜底） | 可选 |
 
+可以直接在「权限管理 → 批量导入/导出权限」粘贴这段 JSON（`user` 留空）：
+
+```json
+{
+  "scopes": {
+    "tenant": [
+      "im:message.p2p_msg:readonly",
+      "im:message.group_at_msg:readonly",
+      "im:message:send_as_bot",
+      "im:resource",
+      "cardkit:card:write",
+      "im:chat:read",
+      "application:application:self_manage"
+    ],
+    "user": []
+  }
+}
+```
+
+`application:application:self_manage` 只用于之后用 API 核对应用配置；不加也能收发消息，只是我无法直接读 scopes 列表。
+
 飞书权限的判定规则见官方文档 [接收消息](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive)：
 私聊消息必须要有 `im:message.p2p_msg` 或 `im:message.p2p_msg:readonly`；群聊 @ 消息需要
 `im:message.group_at_msg` 系列权限。改完权限后要**创建新版本并发布**才生效。
