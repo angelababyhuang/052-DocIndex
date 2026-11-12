@@ -28,6 +28,29 @@ WeKnora 这边完全没反应」。
   `online_instance_cnt` 应为 **1**；大于 1 说明还有别的 client 在抢事件。
 - WeKnora 侧 `feishu status` 只能看到渠道存在，**看不到飞书连接数**；这个要单独查。
 
+## 0.2 复用旧 app 前先清干净
+
+如果这个飞书 app 以前被 Cola / OpenClaw / Hermes 等网关用过，先把它清成「只有 WeKnora 一个 client」再配置：
+
+1. **重置 App Secret**（推荐，能一次性踢掉所有旧 client）：
+   开发者后台 → 应用 → **凭证与基础信息 → App Secret → 重置**。
+   旧 client 拿旧 secret 无法再建长连接；把新 secret 填回 `.env` 的 `FEISHU_APP_SECRET`。
+2. **强制断开已有长连接**：控制台若提供「停用应用/停用版本」，停用 1 分钟后重新启用；
+   否则重启仍在跑旧网关的机器/服务。仅重置 secret 时，已建立的长连接可能要等对端重连才消失。
+3. **清掉旧网关的残留**（可选，但建议）：
+   - 跑过 Cola/OpenClaw/Hermes 的机器上停掉对应网关/服务，避免它继续自动重连；
+   - 本机遗留目录 `~/.cola`、`~/.hermes`、`~/.openclaw` 只是配置/数据，没有进程时不影响；
+     确认不再使用可以删除或改名。
+4. **精简应用配置**：事件订阅保留 `im.message.receive_v1`（长连接）和需要的消息事件即可；
+   Cola 时代的 reaction / 文档评论 / 机器人进出群事件、机器人菜单等可以删掉。
+   应用名/机器人名可以改成「052 文档助手」。
+5. 用 `GET /open-apis/event/v1/connection` 确认 `online_instance_cnt = 0`，再跑 `feishu setup`；
+   配好后应稳定为 **1**（只有 WeKnora）。
+6. 旧 chat 里的历史消息不会随 app 配置清除；不影响新机器人，介意的话在飞书客户端里单独清会话。
+
+> 最省事的替代方案：**不复用旧 app，直接新建一个 052 专用应用**。旧 app 留着不用即可，
+> 不需要做上面的 secret 重置/网关清理。
+
 ## 1. 创建飞书自建应用
 
 1. 打开 <https://open.feishu.cn/app>，用飞书账号登录。
